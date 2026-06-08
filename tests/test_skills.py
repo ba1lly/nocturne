@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from nocturne import skills as skills_mod
 from nocturne.cli import app
 from nocturne.skills import (
+    InstallResult,
     SkillError,
     SkillExists,
     SkillInvalid,
@@ -20,6 +21,7 @@ from nocturne.skills import (
     disable_skill,
     enable_skill,
     install_skill,
+    install_skill_from_github,
     is_skill_enabled,
     list_skills,
     parse_frontmatter,
@@ -85,8 +87,9 @@ def test_parse_frontmatter_rejects_unterminated() -> None:
 
 def test_install_skill_from_file(tmp_path: Path, skills_dir: Path) -> None:
     src = _make_skill_file(tmp_path)
-    name = install_skill(str(src))
-    assert name == "reviewer"
+    result = install_skill(str(src))
+    assert result.name == "reviewer"
+    assert result.status == "installed"
     assert (skills_dir / "reviewer" / "SKILL.md").is_file()
     meta_path = skills_dir / "reviewer" / ".nocturne-skill-meta.json"
     assert meta_path.is_file()
@@ -103,8 +106,9 @@ def test_install_skill_from_directory(tmp_path: Path, skills_dir: Path) -> None:
     (skill_src / "references").mkdir()
     (skill_src / "references" / "guide.md").write_text("guide content", encoding="utf-8")
 
-    name = install_skill(str(skill_src))
-    assert name == "reviewer"
+    result = install_skill(str(skill_src))
+    assert result.name == "reviewer"
+    assert result.status == "installed"
     assert (skills_dir / "reviewer" / "SKILL.md").is_file()
     assert (skills_dir / "reviewer" / "references" / "guide.md").read_text() == "guide content"
 
@@ -119,11 +123,21 @@ def test_install_skill_rejects_missing_source(skills_dir: Path) -> None:
         install_skill("/nonexistent/path/to/skill.md")
 
 
-def test_install_skill_rejects_existing_without_force(tmp_path: Path, skills_dir: Path) -> None:
+def test_install_skill_idempotent_when_already_installed(tmp_path: Path, skills_dir: Path) -> None:
     src = _make_skill_file(tmp_path)
-    install_skill(str(src))
-    with pytest.raises(SkillExists, match="already installed"):
-        install_skill(str(src))
+    first = install_skill(str(src))
+    assert first.status == "installed"
+
+    original_content = (skills_dir / "reviewer" / "SKILL.md").read_text()
+    original_meta_mtime = (skills_dir / "reviewer" / ".nocturne-skill-meta.json").stat().st_mtime
+
+    second = install_skill(str(src))
+    assert second.name == "reviewer"
+    assert second.status == "already_installed"
+
+    assert (skills_dir / "reviewer" / "SKILL.md").read_text() == original_content
+    assert (skills_dir / "reviewer" / ".nocturne-skill-meta.json").stat().st_mtime == original_meta_mtime
+    assert not (skills_dir / ".backup").exists()
 
 
 def test_install_skill_force_backs_up_old(tmp_path: Path, skills_dir: Path) -> None:
@@ -145,6 +159,123 @@ def test_install_skill_force_backs_up_old(tmp_path: Path, skills_dir: Path) -> N
     assert "v2" in new_content
 
 
+def _fake_gh_clone_factory(layout: dict[str, str]):
+    """Build a fake subprocess.run that emulates `gh repo clone OWNER/REPO DEST`.
+
+    Layout is a dict of relative paths to file contents. The fake populates DEST
+    with those files on each clone invocation.
+    """
+    import subprocess as _sp
+
+    def fake_run(args, **kwargs):
+        if list(args[:3]) == ["gh", "repo", "clone"]:
+            dest = Path(args[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            for rel, content in layout.items():
+                p = dest / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+            return _sp.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+    return fake_run
+
+
+def test_install_skill_from_github_finds_skill_at_root(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    fake = _fake_gh_clone_factory({"SKILL.md": SAMPLE_FRONTMATTER})
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    result = install_skill_from_github("ba1lly/reviewer-config")
+
+    assert isinstance(result, InstallResult)
+    assert result.name == "reviewer"
+    assert result.status == "installed"
+    assert (skills_dir / "reviewer" / "SKILL.md").is_file()
+
+
+def test_install_skill_from_github_finds_skill_in_src_skill_subdir(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    """Defizoo/reviewer keeps SKILL.md at src/skill/SKILL.md."""
+    fake = _fake_gh_clone_factory({
+        "README.md": "# repo readme",
+        "src/skill/SKILL.md": SAMPLE_FRONTMATTER,
+        "src/skill/references/style.md": "style guide content",
+    })
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    result = install_skill_from_github("Defizoo/reviewer")
+
+    assert result.name == "reviewer"
+    assert (skills_dir / "reviewer" / "SKILL.md").is_file()
+    assert (skills_dir / "reviewer" / "references" / "style.md").is_file()
+
+
+def test_install_skill_from_github_raises_when_no_skill_md(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    fake = _fake_gh_clone_factory({"README.md": "no skill here"})
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    with pytest.raises(SkillInvalid, match="no SKILL.md"):
+        install_skill_from_github("someone/empty-repo")
+
+
+def test_install_skill_from_github_raises_when_gh_clone_fails(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    import subprocess as _sp
+
+    def fake_run(args, **kwargs):
+        return _sp.CompletedProcess(
+            args=list(args), returncode=1,
+            stdout="", stderr="gh: not authenticated for that repo",
+        )
+
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake_run)
+
+    with pytest.raises(SkillInvalid, match="gh repo clone failed"):
+        install_skill_from_github("private/no-access")
+
+
+def test_install_skill_with_owner_slash_repo_routes_to_github_installer(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    fake = _fake_gh_clone_factory({"SKILL.md": SAMPLE_FRONTMATTER})
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    result = install_skill("ba1lly/reviewer-config")
+
+    assert result.name == "reviewer"
+    assert result.status == "installed"
+
+
+def test_install_skill_with_github_https_url_routes_to_github_installer(
+    monkeypatch: pytest.MonkeyPatch, skills_dir: Path,
+) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        captured.append(list(args))
+        if list(args[:3]) == ["gh", "repo", "clone"]:
+            dest = Path(args[4])
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text(SAMPLE_FRONTMATTER, encoding="utf-8")
+            import subprocess as _sp
+            return _sp.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected: {args!r}")
+
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake_run)
+
+    install_skill("https://github.com/ba1lly/reviewer-config")
+
+    cloned = [a for a in captured if a[:3] == ["gh", "repo", "clone"]]
+    assert len(cloned) == 1
+    assert cloned[0][3] == "ba1lly/reviewer-config"
+
+
 def test_install_skill_from_https_url(tmp_path: Path, skills_dir: Path) -> None:
     """install_skill from HTTPS URL uses urllib (mocked)."""
     from io import BytesIO
@@ -164,8 +295,9 @@ def test_install_skill_from_https_url(tmp_path: Path, skills_dir: Path) -> None:
             return False
 
     with patch("nocturne.skills.urllib.request.urlopen", return_value=FakeResp(SAMPLE_FRONTMATTER.encode())):
-        name = install_skill("https://example.com/SKILL.md")
-    assert name == "reviewer"
+        result = install_skill("https://example.com/SKILL.md")
+    assert result.name == "reviewer"
+    assert result.status == "installed"
     assert (skills_dir / "reviewer" / "SKILL.md").is_file()
 
 
@@ -268,13 +400,15 @@ def test_cli_skill_install_rejects_http(skills_dir: Path) -> None:
     assert "HTTPS" in result.output
 
 
-def test_cli_skill_install_already_installed_exit_2(tmp_path: Path, skills_dir: Path) -> None:
+def test_cli_skill_install_already_installed_is_noop_success(tmp_path: Path, skills_dir: Path) -> None:
     src = _make_skill_file(tmp_path)
     install_skill(str(src))
     runner = CliRunner()
     result = runner.invoke(app, ["skill", "install", str(src)])
-    assert result.exit_code == 2
-    assert "already installed" in result.output
+    assert result.exit_code == 0
+    assert "Already installed" in result.output
+    assert "no changes" in result.output
+    assert "--force" in result.output
 
 
 def test_cli_skill_disable_enable_info(tmp_path: Path, skills_dir: Path) -> None:

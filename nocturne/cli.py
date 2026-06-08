@@ -542,14 +542,16 @@ def skill_install(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing skill"),
 ) -> None:
     """Install a skill from URL, local file, or local directory."""
-    from nocturne.skills import SkillError, SkillExists, SkillInvalid, install_skill
+    from nocturne.skills import SkillError, SkillInvalid, install_skill
 
     try:
-        name = install_skill(source, force=force)
-        typer.echo(f"Installed: {name}")
-    except SkillExists as e:
-        typer.secho(f"ERROR: {e}", fg="red", err=True)
-        raise typer.Exit(2)
+        result = install_skill(source, force=force)
+        if result.status == "already_installed":
+            typer.echo(f"Already installed: {result.name} (no changes; pass --force to overwrite)")
+        elif result.status == "force_reinstalled":
+            typer.echo(f"Reinstalled: {result.name} (previous version backed up)")
+        else:
+            typer.echo(f"Installed: {result.name}")
     except SkillInvalid as e:
         typer.secho(f"ERROR: {e}", fg="red", err=True)
         raise typer.Exit(2)

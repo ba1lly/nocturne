@@ -1,8 +1,9 @@
 """Reviewer module — invoke a reviewer skill on PR diffs + parse findings.
 
 Severity floor filtering per cfg.review.severity_floor.
-Skill-not-installed raises with install hint.
-Falls back to regex parsing if reviewer outputs malformed JSON.
+Self-healing skill resolution: tries the configured skill, then each fallback
+repo via gh-CLI clone, then falls back to opencode's built-in review prompt
+if cfg.review.use_opencode_default_when_unavailable is True.
 """
 from __future__ import annotations
 
@@ -19,7 +20,12 @@ from pydantic import BaseModel, Field
 from nocturne._logging import get_logger
 from nocturne.config import Config
 from nocturne.gitwork import commit_push
-from nocturne.skills import SKILLS_DIR, is_skill_enabled  # noqa: F401 (SKILLS_DIR re-export)
+from nocturne.skills import (  # noqa: F401 (SKILLS_DIR re-export)
+    SKILLS_DIR,
+    SkillError,
+    install_skill_from_github,
+    is_skill_enabled,
+)
 
 logger = get_logger("nocturne.review")
 
@@ -51,20 +57,66 @@ class ReviewResult(BaseModel):
     skill_used: str = ""
 
 
-_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "review_invocation.md.jinja2"
+_TEMPLATE_DIR = Path(__file__).parent / "prompts"
+_TEMPLATE_PATH = _TEMPLATE_DIR / "review_invocation.md.jinja2"
+_DEFAULT_TEMPLATE_PATH = _TEMPLATE_DIR / "review_invocation_default.md.jinja2"
 
 
-def _load_template() -> jinja2.Template:
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(_TEMPLATE_PATH.parent),
+def _jinja_env() -> jinja2.Environment:
+    return jinja2.Environment(
+        loader=jinja2.FileSystemLoader(_TEMPLATE_DIR),
         autoescape=False,
         keep_trailing_newline=True,
     )
-    return env.get_template(_TEMPLATE_PATH.name)
+
+
+def _load_template() -> jinja2.Template:
+    return _jinja_env().get_template(_TEMPLATE_PATH.name)
 
 
 def _render_review_prompt(skill_name: str, pr_url: str, diff: str) -> str:
     return _load_template().render(skill_name=skill_name, pr_url=pr_url, diff=diff)
+
+
+def _render_default_review_prompt(pr_url: str, diff: str) -> str:
+    return _jinja_env().get_template(_DEFAULT_TEMPLATE_PATH.name).render(pr_url=pr_url, diff=diff)
+
+
+def _ensure_reviewer_skill(cfg: Config) -> tuple[Optional[str], bool]:
+    """Resolve the reviewer skill to use for this review.
+
+    Resolution order:
+      1. cfg.review.skill_name if already installed in opencode
+      2. Auto-install from each cfg.review.fallback_repos in order (gh-CLI authed)
+      3. Return (None, True) iff cfg.review.use_opencode_default_when_unavailable;
+         otherwise return (None, False) and let the caller decide to fail.
+
+    Returns (skill_name_or_None, used_default_review).
+    """
+    skill_name = cfg.review.skill_name
+    if is_skill_enabled(skill_name):
+        return skill_name, False
+
+    for repo in cfg.review.fallback_repos:
+        try:
+            result = install_skill_from_github(repo, force=False)
+        except SkillError as exc:
+            logger.info("could not auto-install reviewer from %s: %s", repo, exc)
+            continue
+        logger.info(
+            "auto-installed reviewer skill '%s' from %s (status=%s)",
+            result.name, repo, result.status,
+        )
+        if is_skill_enabled(result.name):
+            return result.name, False
+
+    if cfg.review.use_opencode_default_when_unavailable:
+        logger.info(
+            "no reviewer skill available; falling back to opencode's default review prompt"
+        )
+        return None, True
+
+    return None, False
 
 
 def _compute_diff(worktree: Path, base: str = "main") -> str:
@@ -145,22 +197,35 @@ def review_pr(
     cfg: Config,
     base: str = "main",
 ) -> ReviewResult:
-    """Invoke the reviewer skill on a PR diff. Returns ReviewResult with findings."""
-    skill_name = cfg.review.skill_name
-    if not is_skill_enabled(skill_name):
+    """Invoke the reviewer skill on a PR diff. Returns ReviewResult with findings.
+
+    Self-healing: if cfg.review.skill_name isn't installed, attempts to install
+    from each cfg.review.fallback_repos via `gh repo clone`. If all fail and
+    cfg.review.use_opencode_default_when_unavailable is True, runs opencode
+    with a generic review prompt; otherwise raises SkillNotInstalled.
+    """
+    skill_name_or_none, used_default = _ensure_reviewer_skill(cfg)
+    if skill_name_or_none is None and not used_default:
         raise SkillNotInstalled(
-            f"reviewer skill '{skill_name}' is not installed. "
-            f"Run `nocturne skill install <source>` to install it."
+            f"reviewer skill '{cfg.review.skill_name}' could not be resolved "
+            f"(tried local + fallback_repos={cfg.review.fallback_repos}); "
+            f"set review.use_opencode_default_when_unavailable=true to permit fallback."
         )
+
+    skill_used = skill_name_or_none or "opencode-default"
 
     diff = _compute_diff(worktree, base=base)
     if not diff.strip():
         logger.info("empty diff for %s; reporting clean", pr_url)
         return ReviewResult(
-            clean=True, findings=[], raw_output="", attempts=1, skill_used=skill_name,
+            clean=True, findings=[], raw_output="", attempts=1, skill_used=skill_used,
         )
 
-    prompt = _render_review_prompt(skill_name, pr_url, diff)
+    if used_default:
+        prompt = _render_default_review_prompt(pr_url, diff)
+    else:
+        assert skill_name_or_none is not None
+        prompt = _render_review_prompt(skill_name_or_none, pr_url, diff)
 
     # Write the prompt to a temp file in the worktree and invoke OpenCode.
     # We use subprocess directly (not opencode_driver.run) because the review
@@ -189,7 +254,7 @@ def review_pr(
         logger.warning("review subprocess timed out for %s", pr_url)
         return ReviewResult(
             clean=False, findings=[], raw_output="timeout",
-            attempts=1, skill_used=skill_name,
+            attempts=1, skill_used=skill_used,
         )
     finally:
         try:
@@ -237,9 +302,9 @@ def review_pr(
     return ReviewResult(
         clean=clean,
         findings=findings,
-        raw_output=combined_text[:10000],  # cap for memory
+        raw_output=combined_text[:10000],
         attempts=1,
-        skill_used=skill_name,
+        skill_used=skill_used,
     )
 
 

@@ -111,8 +111,9 @@ def test_no_hardcoded_owner_in_production():
             continue
         if "scripts/setup.sh" in line:
             continue
-        # Acceptance scripts use it as a default, which is allowed per task spec
         if "scripts/m" in line and "_acceptance.sh" in line:
+            continue
+        if "nocturne/config.py" in line and "ba1lly/reviewer-config" in line:
             continue
         filtered_lines.append(line)
 

@@ -348,17 +348,18 @@ def _write_env_file(env_file: Path, answers: WizardAnswers, console: Console) ->
 
 
 def _install_reviewer_skill(console: Console) -> None:
-    from nocturne.skills import SkillError, SkillExists, install_skill
+    from nocturne.skills import SkillError, install_skill
 
     src = Path.home() / ".agents" / "skills" / "reviewer"
     if not src.exists():
         console.print(f"  [yellow]⚠[/yellow] {src} not found; cannot install")
         return
     try:
-        name = install_skill(str(src), force=False)
-        console.print(f"  [green]✓[/green] installed skill: {name}")
-    except SkillExists:
-        console.print("  [dim]→ reviewer skill already installed (use `nocturne skill install --force` to overwrite)[/dim]")
+        result = install_skill(str(src), force=False)
+        if result.status == "already_installed":
+            console.print(f"  [dim]→ {result.name} already installed (no changes)[/dim]")
+        else:
+            console.print(f"  [green]✓[/green] installed skill: {result.name}")
     except SkillError as e:
         console.print(f"  [yellow]⚠[/yellow] skill install failed: {e}")
 

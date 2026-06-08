@@ -153,10 +153,12 @@ echo ">>> Test 1: Skill install"
 # Verify listed
 .venv/bin/nocturne skill list | grep -q reviewer || { echo "FAIL: reviewer skill not listed"; exit 1; }
 
-# Re-install rejected without --force
-DUPE_OUTPUT=$(.venv/bin/nocturne skill install ~/.agents/skills/reviewer/ 2>&1) || true
+# Re-install is idempotent (already-installed → no-op success, NOT an error)
+DUPE_OUTPUT=$(.venv/bin/nocturne skill install ~/.agents/skills/reviewer/ 2>&1)
 echo "$DUPE_OUTPUT" | grep -qi "already installed" \
-    || { echo "FAIL: re-install not rejected; output was:"; echo "$DUPE_OUTPUT"; exit 1; }
+    || { echo "FAIL: re-install did not report 'already installed'; output was:"; echo "$DUPE_OUTPUT"; exit 1; }
+echo "$DUPE_OUTPUT" | grep -qi "no changes\|--force" \
+    || { echo "FAIL: re-install missing the 'no changes / --force' hint; output was:"; echo "$DUPE_OUTPUT"; exit 1; }
 
 # Force backup
 .venv/bin/nocturne skill install ~/.agents/skills/reviewer/ --force 2>&1 | tee -a "$EVIDENCE_DIR/milestone-M5-skill-install.log"

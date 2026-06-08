@@ -8,19 +8,26 @@ Source types supported by `install_skill`:
 - HTTPS URL (rejects http://) → fetched via urllib with 30s timeout
 - Local file path → read SKILL.md directly
 - Local directory path → copy whole directory contents
+- GitHub repo slug (owner/repo) → cloned via `gh repo clone` for private auth
 
-Existing skills are NEVER silently overwritten. Re-installing the same skill
-without `force=True` raises SkillExists. With `force=True`, the old version is
-backed up to `.backup/<name>-<ISO-timestamp>/` first.
+Install is idempotent: re-installing an already-present skill without
+`force=True` is a no-op (returns InstallResult.status='already_installed').
+With `force=True`, the existing version is backed up to
+`.backup/<name>-<ISO-timestamp>/` and then overwritten.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import subprocess
+import tempfile
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel
@@ -31,13 +38,23 @@ log = get_logger("nocturne.skills")
 
 SKILLS_DIR = Path.home() / ".config" / "opencode" / "skills"
 
+_GH_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*$")
+_GH_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*?)(?:\.git)?/?$")
+
+SKILL_MD_CANDIDATE_PATHS: tuple[str, ...] = (
+    "SKILL.md",
+    "skill/SKILL.md",
+    "src/skill/SKILL.md",
+    "skills/SKILL.md",
+)
+
 
 class SkillError(Exception):
     """Base class for skill management errors."""
 
 
 class SkillExists(SkillError):
-    """Raised when a skill already exists and force was not specified."""
+    """Retained for backward-compat with callers; no longer raised by install_skill."""
 
 
 class SkillInvalid(SkillError):
@@ -46,6 +63,15 @@ class SkillInvalid(SkillError):
 
 class SkillNotFound(SkillError):
     """Raised when a skill is not installed."""
+
+
+InstallStatus = Literal["installed", "already_installed", "force_reinstalled"]
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    name: str
+    status: InstallStatus
 
 
 class SkillMeta(BaseModel):
@@ -154,13 +180,26 @@ def _read_meta(skill_dir: Path) -> SkillMeta | None:
         return None
 
 
-def install_skill(source: str, force: bool = False) -> str:
-    """Install a skill from URL, local file, or local directory.
+def install_skill(source: str, force: bool = False) -> InstallResult:
+    """Install a skill from URL, local file, local directory, or GitHub repo slug.
 
-    Returns the installed skill name. Raises:
-    - SkillInvalid: bad URL scheme / unreadable source / bad frontmatter
-    - SkillExists: skill already installed and force=False
+    Idempotent: an already-installed skill returns InstallResult(status='already_installed')
+    without modifying disk. Pass force=True to back up and overwrite.
+
+    Source forms:
+    - 'owner/repo' or 'https://github.com/owner/repo' → gh repo clone (private-friendly)
+    - 'https://...' → urllib HTTPS fetch (public only)
+    - local file path → read SKILL.md directly
+    - local directory path → copy whole directory contents
+
+    Raises SkillInvalid on bad source / frontmatter / fetch failure.
     """
+    gh_match = _GH_URL_RE.match(source)
+    if gh_match:
+        return install_skill_from_github(gh_match.group(1), force=force)
+    if _GH_SLUG_RE.match(source) and not Path(source).expanduser().exists():
+        return install_skill_from_github(source, force=force)
+
     src_type = _detect_source_type(source)
 
     extra_dir_files: list[tuple[str, bytes]] = []  # (relpath, bytes) for dir sources
@@ -180,11 +219,9 @@ def install_skill(source: str, force: bool = False) -> str:
         if not skill_md.is_file():
             raise SkillInvalid(f"directory does not contain SKILL.md: {d}")
         content = skill_md.read_text(encoding="utf-8")
-        # Collect ancillary files (excluding SKILL.md and meta) for copy
         for child in d.rglob("*"):
             if child.is_file() and child != skill_md:
                 rel = child.relative_to(d)
-                # skip our own meta file
                 if rel.name == ".nocturne-skill-meta.json":
                     continue
                 extra_dir_files.append((str(rel), child.read_bytes()))
@@ -203,18 +240,18 @@ def install_skill(source: str, force: bool = False) -> str:
     already_installed = main_md.exists() or (skill_dir / "SKILL.md.disabled").exists()
 
     if already_installed and not force:
-        raise SkillExists(
-            f"skill '{name}' already installed; pass --force to overwrite"
-        )
+        log.info("skill '%s' already installed; no-op (pass --force to overwrite)", name)
+        return InstallResult(name=name, status="already_installed")
 
+    status: InstallStatus = "installed"
     if already_installed and force:
-        # Backup whole skill_dir
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_root = SKILLS_DIR / ".backup"
         backup_root.mkdir(parents=True, exist_ok=True)
         backup_dest = backup_root / f"{name}-{ts}"
         shutil.move(str(skill_dir), str(backup_dest))
         log.info("backed up old skill to %s", backup_dest)
+        status = "force_reinstalled"
 
     skill_dir.mkdir(parents=True, exist_ok=True)
     main_md.write_text(content, encoding="utf-8")
@@ -236,7 +273,54 @@ def install_skill(source: str, force: bool = False) -> str:
     _write_meta(skill_dir, meta)
 
     log.info("installed skill %s from %s", name, source)
-    return name
+    return InstallResult(name=name, status=status)
+
+
+def install_skill_from_github(repo_slug: str, force: bool = False) -> InstallResult:
+    """Clone a GitHub repo via gh CLI (handles private auth) and install the skill.
+
+    Searches the cloned repo for SKILL.md at: SKILL.md, skill/SKILL.md,
+    src/skill/SKILL.md, skills/SKILL.md. The first match wins.
+
+    Raises SkillInvalid if gh is missing, clone fails (no access / wrong slug),
+    or no SKILL.md is found at a known location.
+    """
+    if not _GH_SLUG_RE.match(repo_slug):
+        raise SkillInvalid(f"not a valid owner/repo slug: {repo_slug!r}")
+
+    with tempfile.TemporaryDirectory(prefix="nocturne-skill-clone-") as tmp:
+        clone_dest = Path(tmp) / "repo"
+        try:
+            result = subprocess.run(
+                ["gh", "repo", "clone", repo_slug, str(clone_dest), "--", "--depth", "1"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+        except FileNotFoundError as e:
+            raise SkillInvalid(
+                "gh CLI not found; install from https://cli.github.com/ or use a local path"
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            raise SkillInvalid(f"gh repo clone timed out for {repo_slug}") from e
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise SkillInvalid(
+                f"gh repo clone failed for {repo_slug}: {stderr or 'unknown error'}"
+            )
+
+        for candidate in SKILL_MD_CANDIDATE_PATHS:
+            skill_md = clone_dest / candidate
+            if skill_md.is_file():
+                skill_dir = skill_md.parent
+                log.info("found SKILL.md in %s at %s", repo_slug, candidate)
+                return install_skill(str(skill_dir), force=force)
+
+        raise SkillInvalid(
+            f"no SKILL.md in {repo_slug} (looked in: {', '.join(SKILL_MD_CANDIDATE_PATHS)})"
+        )
 
 
 def list_skills() -> list[SkillMeta]:

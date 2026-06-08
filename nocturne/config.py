@@ -112,6 +112,10 @@ class ReviewConfig(StrictBaseModel):
     severity_floor: Literal["info", "low", "medium", "high", "critical"] = "info"
     skill_name: str = "reviewer"
     append_only: Literal[True] = True
+    fallback_repos: list[str] = Field(
+        default_factory=lambda: ["ba1lly/reviewer-config", "Defizoo/reviewer"]
+    )
+    use_opencode_default_when_unavailable: bool = True
 
 
 class HealthcheckConfig(StrictBaseModel):

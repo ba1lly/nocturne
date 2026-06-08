@@ -68,13 +68,43 @@ def _patch_opencode(
 # ---------- Tests ----------
 
 
-def test_review_skill_not_installed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_review_falls_back_to_opencode_default_when_skill_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """When the named skill isn't installed AND each fallback repo is inaccessible,
+    review_pr must NOT raise — it falls back to the opencode-default prompt and
+    reports skill_used='opencode-default'."""
+    from nocturne.skills import SkillInvalid
+
     _patch_skill_enabled(monkeypatch, False)
+    monkeypatch.setattr(
+        "nocturne.review.install_skill_from_github",
+        lambda repo, force=False: (_ for _ in ()).throw(SkillInvalid(f"no access to {repo}")),
+    )
+    _patch_diff(monkeypatch, "diff --git a/x b/x\n+hello\n")
+    ndjson = _ndjson_text_event("```json\n[]\n```")
+    captured_prompts: list[str] = []
+    orig_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        if isinstance(args, (list, tuple)) and len(args) > 0 and args[0] == "git":
+            return orig_run(args, **kwargs)
+        for i, a in enumerate(args):
+            if a == "-f" and i + 1 < len(args):
+                captured_prompts.append(Path(args[i + 1]).read_text(encoding="utf-8"))
+                break
+        return _fake_completed(stdout=ndjson)
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+
     cfg = _cfg()
-    with pytest.raises(SkillNotInstalled) as excinfo:
-        review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
-    assert "nocturne skill install" in str(excinfo.value)
-    assert cfg.review.skill_name in str(excinfo.value)
+    result = review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
+
+    assert result.skill_used == "opencode-default"
+    assert result.clean is True
+    assert len(captured_prompts) == 1
+    assert "You are running the" not in captured_prompts[0]
+    assert "no specialised reviewer skill" in captured_prompts[0].lower()
 
 
 def test_review_clean_returns_no_findings(
@@ -273,14 +303,26 @@ def test_findings_summary_empty() -> None:
 def test_skill_missing_message_includes_install_hint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """Alias of test_review_skill_not_installed — explicit assertion on hint format."""
+    """When no skill is available AND fallback to opencode default is disabled,
+    the SkillNotInstalled message must name the configured fallback_repos so
+    the operator knows what gh access to grant."""
     _patch_skill_enabled(monkeypatch, False)
+    monkeypatch.setattr(
+        "nocturne.review.install_skill_from_github",
+        lambda repo, force=False: (_ for _ in ()).throw(
+            __import__("nocturne.skills", fromlist=["SkillInvalid"]).SkillInvalid(f"no access to {repo}")
+        ),
+    )
     cfg = _cfg()
+    cfg.review.use_opencode_default_when_unavailable = False
+    cfg.review.fallback_repos = ["someorg/reviewer", "otherorg/reviewer"]
+
     with pytest.raises(SkillNotInstalled) as excinfo:
         review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
     msg = str(excinfo.value)
-    assert "not installed" in msg
-    assert "nocturne skill install" in msg
+    assert "could not be resolved" in msg
+    assert "someorg/reviewer" in msg or "fallback_repos" in msg
+    assert "use_opencode_default_when_unavailable" in msg
 
 
 def test_malformed_fallback(
