@@ -80,19 +80,19 @@ def has_error_events(events: list[dict[str, object]]) -> list[dict[str, object]]
 
 
 def _build_opencode_args(task: Task, cwd: Path, prompt_content: str, cfg: Config) -> list[str]:
-    model_string = task.coding_model if task.coding_model else cfg.models.coding
-    return [
+    args: list[str] = [
         cfg.opencode.command,
         "run",
-        "--model",
-        model_string,
         "--dir",
         str(cwd),
         "--format",
         "json",
-        "--",
-        prompt_content,
     ]
+    model_string = task.coding_model if task.coding_model else cfg.models.coding
+    if model_string:
+        args.extend(["--model", model_string])
+    args.extend(["--", prompt_content])
+    return args
 
 
 def run(
@@ -106,15 +106,15 @@ def run(
     args = _build_opencode_args(task, cwd, prompt_content, cfg)
     enforce_no_dangerous_opencode_flags(args)
 
-    model_string = task.coding_model if task.coding_model else cfg.models.coding
-    provider_name = provider_of(model_string)
-    provider_cfg = cfg.providers.get(provider_name)
-
     env = {**os.environ}
-    if provider_cfg is not None:
-        api_key = os.environ.get(provider_cfg.api_key_env, "")
-        if api_key:
-            env["OPENCODE_PROVIDER_API_KEY"] = api_key
+    model_string = task.coding_model if task.coding_model else cfg.models.coding
+    if model_string:
+        provider_name = provider_of(model_string)
+        provider_cfg = cfg.providers.get(provider_name)
+        if provider_cfg is not None:
+            api_key = os.environ.get(provider_cfg.api_key_env, "")
+            if api_key:
+                env["OPENCODE_PROVIDER_API_KEY"] = api_key
 
     proc = subprocess.Popen(
         args,

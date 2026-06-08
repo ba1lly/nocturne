@@ -283,7 +283,7 @@ def apply_fixes(
 ) -> ApplyFixesResult:
     """Invoke OpenCode to apply fixes for the findings; commit + push (append-only).
 
-    Uses cfg.models.coding (actual code changes, not reasoning).
+    Lets opencode pick its own model unless cfg.models.coding is explicitly set.
     Calls gitwork.commit_push which enforces no force-push.
     """
     if not findings:
@@ -297,15 +297,18 @@ def apply_fixes(
         f.write(prompt)
         prompt_path = f.name
 
+    opencode_args = [
+        cfg.opencode.command, "run",
+        "--dir", str(worktree),
+        "--format", "json",
+        "-f", prompt_path,
+    ]
+    if cfg.models.coding:
+        opencode_args.extend(["--model", cfg.models.coding])
+
     try:
         result = subprocess.run(
-            [
-                cfg.opencode.command, "run",
-                "--model", cfg.models.coding,
-                "--dir", str(worktree),
-                "--format", "json",
-                "-f", prompt_path,
-            ],
+            opencode_args,
             capture_output=True, text=True,
             timeout=cfg.opencode.timeout_min * 60,
             check=False,

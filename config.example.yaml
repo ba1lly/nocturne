@@ -23,9 +23,10 @@ providers:
   #   api_key_env: "ZHIPUAI_API_KEY"
 
 models:
-  reasoning: "alibaba-coding-plan/qwen3.6-plus" # full provider/model string
+  reasoning: "alibaba-coding-plan/qwen3.6-plus" # used by triage + report (direct API)
   report: "alibaba-coding-plan/qwen3.6-plus"
-  coding: "alibaba-coding-plan/qwen3-coder-plus"
+  # coding: optional — if omitted, opencode picks its own model from its config.
+  # Set only if you want to force a specific model for the coding agent.
 
 opencode:
   command: "opencode"

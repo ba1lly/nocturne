@@ -378,6 +378,7 @@ def test_apply_fixes_with_findings_calls_opencode_and_commits(
     calls = _patch_apply_fixes_subprocess(monkeypatch)
     recorded = _record_commit_push(monkeypatch)
     cfg = _cfg()
+    cfg.models.coding = "alibaba-coding-plan/qwen3-coder-plus"
 
     result = apply_fixes(
         "https://github.com/x/y/pull/1",
@@ -395,7 +396,6 @@ def test_apply_fixes_with_findings_calls_opencode_and_commits(
     wt_arg, msg_arg = recorded[0]
     assert wt_arg == tmp_path
     assert msg_arg == "fix(review): address 2 reviewer findings [round 1]"
-    # opencode must have been invoked with the coding model
     opencode_calls = [
         c for c in calls
         if isinstance(c[0], (list, tuple)) and len(c[0]) > 0 and c[0][0] != "git"
@@ -404,6 +404,31 @@ def test_apply_fixes_with_findings_calls_opencode_and_commits(
     args, _ = opencode_calls[0]
     assert "--model" in args
     assert args[args.index("--model") + 1] == cfg.models.coding
+
+
+def test_apply_fixes_omits_model_when_coding_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    calls = _patch_apply_fixes_subprocess(monkeypatch)
+    _record_commit_push(monkeypatch)
+    cfg = _cfg()
+    cfg.models.coding = None
+
+    apply_fixes(
+        "https://github.com/x/y/pull/2",
+        [_finding()],
+        tmp_path,
+        cfg,
+        attempt=1,
+    )
+
+    opencode_calls = [
+        c for c in calls
+        if isinstance(c[0], (list, tuple)) and len(c[0]) > 0 and c[0][0] != "git"
+    ]
+    assert len(opencode_calls) == 1
+    args, _ = opencode_calls[0]
+    assert "--model" not in args, "review.apply_fixes must let opencode pick its model when cfg.models.coding is unset"
 
 
 def test_apply_fixes_no_changes_returns_zero(

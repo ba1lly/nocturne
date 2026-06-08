@@ -188,6 +188,7 @@ def test_has_error_events_returns_empty_list_when_absent() -> None:
 
 
 def test_build_opencode_args_uses_config_model_when_task_model_empty(task: Task, cfg: Config, tmp_path: Path) -> None:
+    cfg.models.coding = "alibaba-coding-plan/qwen3-coder-plus"
     args = _build_opencode_args(task, tmp_path, "test prompt content", cfg)
 
     assert args[args.index("--model") + 1] == cfg.models.coding
@@ -200,6 +201,15 @@ def test_build_opencode_args_uses_task_model_when_set(task: Task, cfg: Config, t
     args = _build_opencode_args(task, tmp_path, "test", cfg)
 
     assert args[args.index("--model") + 1] == "alibaba-coding-plan/custom-coder"
+
+
+def test_build_opencode_args_omits_model_when_neither_set(task: Task, cfg: Config, tmp_path: Path) -> None:
+    cfg.models.coding = None
+    task.coding_model = ""
+    args = _build_opencode_args(task, tmp_path, "test prompt", cfg)
+
+    assert "--model" not in args
+    assert args[-1] == "test prompt"
 
 
 def test_dangerous_flag_blocked(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:

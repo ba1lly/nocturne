@@ -41,8 +41,8 @@ class ProviderConfig(StrictBaseModel):
 
 class ModelsConfig(StrictBaseModel):
     reasoning: str = Field(pattern=MODEL_PATTERN)
-    coding: str = Field(pattern=MODEL_PATTERN)
     report: str = Field(pattern=MODEL_PATTERN)
+    coding: Optional[str] = Field(default=None, pattern=MODEL_PATTERN)
 
 
 class OpenCodeConfig(StrictBaseModel):
@@ -174,7 +174,10 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
 def _validate_env_vars(cfg: Config) -> None:
     missing: list[str] = []
     seen: set[str] = set()
-    for model_string in (cfg.models.reasoning, cfg.models.coding, cfg.models.report):
+    model_strings = [cfg.models.reasoning, cfg.models.report]
+    if cfg.models.coding is not None:
+        model_strings.append(cfg.models.coding)
+    for model_string in model_strings:
         provider_name = provider_of(model_string)
         if provider_name not in cfg.providers:
             raise ConfigError(f"unknown provider for model: {model_string}")

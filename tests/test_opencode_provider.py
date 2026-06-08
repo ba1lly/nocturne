@@ -78,6 +78,7 @@ def test_check_all_models_available_passes_when_all_present(monkeypatch: pytest.
 
 def test_check_all_models_available_raises_with_missing_models(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _cfg()
+    cfg.models.coding = "alibaba-coding-plan/qwen3-coder-plus"
     monkeypatch.setattr(
         opcheck,
         "list_opencode_models",
@@ -90,6 +91,26 @@ def test_check_all_models_available_raises_with_missing_models(monkeypatch: pyte
     message = str(excinfo.value)
     assert f"Models not registered with OpenCode: {sorted([cfg.models.coding])}" in message
     assert f"Providers needing registration: {sorted(['alibaba-coding-plan'])}" in message
+
+
+def test_check_all_models_available_skips_when_coding_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg()
+    cfg.models.coding = None
+
+    def boom() -> set[str]:
+        raise AssertionError("list_opencode_models must not be called when coding is unset")
+
+    monkeypatch.setattr(opcheck, "list_opencode_models", boom)
+
+    opcheck.check_all_models_available(cfg)
+
+
+def test_check_all_models_available_skips_when_opencode_cli_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg()
+    cfg.models.coding = "alibaba-coding-plan/qwen3-coder-plus"
+    monkeypatch.setattr(opcheck, "list_opencode_models", lambda: set())
+
+    opcheck.check_all_models_available(cfg)
 
 
 def test_assert_provider_registered_passes_for_known_provider(monkeypatch: pytest.MonkeyPatch) -> None:

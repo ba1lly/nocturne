@@ -41,8 +41,14 @@ def list_opencode_models() -> set[str]:
 
 
 def check_all_models_available(cfg: Config) -> None:
-    required = {cfg.models.reasoning, cfg.models.coding, cfg.models.report}
+    required: set[str] = {cfg.models.reasoning, cfg.models.report}
+    if cfg.models.coding is not None:
+        required.add(cfg.models.coding)
+    else:
+        return
     available = list_opencode_models()
+    if not available:
+        return
     missing = required - available
     if missing:
         providers_missing = {provider_of(model) for model in missing}
@@ -66,11 +72,10 @@ def assert_provider_registered(provider_name: str) -> None:
 
 
 def _configured_models_for_provider(cfg: Config, provider_name: str) -> list[str]:
-    return [
-        model
-        for model in (cfg.models.reasoning, cfg.models.coding, cfg.models.report)
-        if provider_of(model) == provider_name
-    ]
+    candidates = [cfg.models.reasoning, cfg.models.report]
+    if cfg.models.coding is not None:
+        candidates.append(cfg.models.coding)
+    return [model for model in candidates if provider_of(model) == provider_name]
 
 
 def _provider_model_ids(response: object) -> set[str]:
