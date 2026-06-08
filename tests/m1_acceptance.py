@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("NOCTURNE_RUN_M1") != "1",
     reason="Set NOCTURNE_RUN_M1=1 to run live M1 acceptance",

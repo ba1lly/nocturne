@@ -26,7 +26,6 @@ from nocturne.skills import (
     uninstall_skill,
 )
 
-
 SAMPLE_FRONTMATTER = """---
 name: reviewer
 description: Code review skill

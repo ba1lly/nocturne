@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
-
-from typing import cast
 
 from nocturne.models import Task, TaskStatus, TriageOutcome, TriageResult
 
@@ -466,8 +465,8 @@ async def test_wait_for_resume_returns_true_when_running(fake_cfg, inmem_store):
 @pytest.mark.asyncio
 async def test_review_scheduled_post_done(fake_cfg, inmem_store, monkeypatch):
     """A task with status='done' and pr_url schedules a review_fix_loop task."""
-    from nocturne.daemon import Daemon
     import nocturne.review as review_mod
+    from nocturne.daemon import Daemon
 
     completed = asyncio.Event()
     captured: dict = {}

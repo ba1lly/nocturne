@@ -6,7 +6,6 @@ from pathlib import Path
 
 from nocturne.models import Task, VerifyResult
 
-
 TEST_PATH_REGEX = re.compile(r"(^|/)(test_[^/]+\.py$|[^/]+_test\.py$|tests?/)")
 
 

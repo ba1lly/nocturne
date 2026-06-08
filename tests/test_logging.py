@@ -18,11 +18,11 @@ class _TimedLike(Protocol):
 
 
 _logging = importlib.import_module("nocturne._logging")
-SensitiveFilter = cast(type[logging.Filter], getattr(_logging, "SensitiveFilter"))
-discord_formatter = cast(Callable[[logging.LogRecord], str], getattr(_logging, "discord_formatter"))
-get_logger = cast(Callable[[str], logging.Logger], getattr(_logging, "get_logger"))
-setup_logging = cast(Callable[[Path], None], getattr(_logging, "setup_logging"))
-timed = cast(Callable[[str], _TimedLike], getattr(_logging, "timed"))
+SensitiveFilter = cast(type[logging.Filter], _logging.SensitiveFilter)
+discord_formatter = cast(Callable[[logging.LogRecord], str], _logging.discord_formatter)
+get_logger = cast(Callable[[str], logging.Logger], _logging.get_logger)
+setup_logging = cast(Callable[[Path], None], _logging.setup_logging)
+timed = cast(Callable[[str], _TimedLike], _logging.timed)
 
 
 def _record(message: str, *, level: int = logging.INFO, args: tuple[object, ...] = ()) -> logging.LogRecord:

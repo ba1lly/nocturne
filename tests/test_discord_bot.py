@@ -9,7 +9,6 @@ import pytest
 
 from nocturne.store import Store
 
-
 # -- fixtures + fakes --
 
 
@@ -558,8 +557,8 @@ async def test_cmd_run_unallowed_repo(inmem_store, fake_cfg, fake_discord_with_c
 async def test_cmd_run_allowed_repo_schedules(
     inmem_store, fake_cfg, fake_discord_with_commands, monkeypatch
 ):
-    from nocturne.discord_bot import NocturneBot
     import nocturne.orchestrator as orch
+    from nocturne.discord_bot import NocturneBot
     called = {"n": 0}
 
     def fake_run_batch(repo_cfg, cfg, store, *, dry_run=False):

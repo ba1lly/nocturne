@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # pyright: reportMissingImports=false
-
 import subprocess
 from datetime import datetime
 from pathlib import Path

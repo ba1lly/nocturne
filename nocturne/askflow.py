@@ -305,8 +305,8 @@ def build_hitl_graph(cfg: Config, store: Store):  # type: ignore[no-untyped-def]
     backed checkpoint is held by the daemon process, not constructed here).
     """
     try:
-        from langgraph.graph import END, StateGraph
         from langgraph.checkpoint.memory import MemorySaver
+        from langgraph.graph import END, StateGraph
         from langgraph.types import interrupt
     except ImportError as exc:
         raise AskflowError(f"langgraph not installed: {exc}") from exc

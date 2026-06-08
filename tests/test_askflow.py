@@ -18,7 +18,6 @@ Covers:
 from __future__ import annotations
 
 # pyright: reportMissingImports=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportAny=false, reportExplicitAny=false, reportUnannotatedClassAttribute=false, reportArgumentType=false
-
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +41,6 @@ from nocturne.config import (
 )
 from nocturne.models import OpenCodeResult, ParkedTask, Task, VerifyResult
 from nocturne.store import Store
-
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers

@@ -20,7 +20,6 @@ from nocturne.daemon_recovery import (
 from nocturne.models import Task, TaskStatus
 from nocturne.store import Store
 
-
 # ---------- helpers ----------
 
 

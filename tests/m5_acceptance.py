@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("NOCTURNE_RUN_M5") != "1",
     reason="Set NOCTURNE_RUN_M5=1 to run live M5 acceptance",

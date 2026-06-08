@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 
 from nocturne.models import OpenCodeResult
 from nocturne.store import Store
-
-from tests.fakes import FakeGhResult, FakeOpenCodeResult, FakeOpenAI, RecordingSubprocess
+from tests.fakes import FakeGhResult, FakeOpenAI, FakeOpenCodeResult, RecordingSubprocess
 
 
 def test_fake_opencode_success_builds_expected_result() -> None:

@@ -24,7 +24,6 @@ from nocturne.config import (
 from nocturne.models import Task
 from nocturne.prompts.render import load_soul, render_review_prompt, render_task_prompt
 
-
 PROJECT_DIR = Path("/home/bailly/projects/nocturne")
 
 

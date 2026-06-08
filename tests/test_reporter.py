@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nocturne.models import RunReport, Task, ParkedTask
-from nocturne.config import Config, ProviderConfig, ModelsConfig
+from nocturne.config import Config, ModelsConfig, ProviderConfig
+from nocturne.models import ParkedTask, RunReport, Task
 from nocturne.reporter import (
-    write_report,
-    summarize,
-    discord_message,
-    _human_duration,
     _deterministic_summary,
-    _format_task_report,
     _format_run_report,
-    post_task_report,
+    _format_task_report,
+    _human_duration,
+    discord_message,
     post_run_report,
+    post_task_report,
+    summarize,
+    write_report,
 )
 
 
@@ -143,7 +143,7 @@ class TestWriteReport:
     def test_write_report_creates_file(self, sample_report: RunReport, tmp_path: Path) -> None:
         """Test that write_report creates a file and returns its path."""
         result_path = write_report(sample_report, tmp_path)
-        
+
         assert result_path.exists()
         assert result_path.parent == tmp_path
         assert result_path.name.endswith(".md")
@@ -154,17 +154,17 @@ class TestWriteReport:
         """Test that report file contains all expected sections."""
         result_path = write_report(sample_report, tmp_path)
         content = result_path.read_text()
-        
+
         # Check header
         assert "# Nocturne Run Report" in content
         assert "**Started**:" in content
         assert "**Ended**:" in content
         assert "**Duration**:" in content
-        
+
         # Check summary section
         assert "## Summary" in content
         assert "Test summary" in content
-        
+
         # Check done section
         assert "## Done (1)" in content
         assert "Issue #1" in content
@@ -172,22 +172,22 @@ class TestWriteReport:
         assert "https://github.com/owner/repo/pull/42" in content
         assert "`fix/parser-bug`" in content
         assert "Attempts: 1" in content
-        
+
         # Check parked section
         assert "## Parked (1)" in content
         assert "Issue #2" in content
         assert "Implement feature X" in content
         assert "Should we use async or sync?" in content
-        
+
         # Check skipped section
         assert "## Skipped (1)" in content
         assert "Issue #3" in content
         assert "Not enough context" in content
-        
+
         # Check errors section
         assert "## Errors (1)" in content
         assert "Timeout on task 4" in content
-        
+
         # Check token usage
         assert "Token usage: 5000 tokens" in content
 
@@ -202,9 +202,9 @@ class TestWriteReport:
         """Test that write_report creates reports_dir if it doesn't exist."""
         reports_dir = tmp_path / "reports" / "nested"
         assert not reports_dir.exists()
-        
+
         write_report(sample_report, reports_dir)
-        
+
         assert reports_dir.exists()
 
     def test_write_report_empty_lists(self, tmp_path: Path) -> None:
@@ -219,10 +219,10 @@ class TestWriteReport:
             summary="Empty run",
             token_usage=0,
         )
-        
+
         result_path = write_report(report, tmp_path)
         content = result_path.read_text()
-        
+
         assert "## Done (0)" in content
         assert "## Parked (0)" in content
         assert "## Skipped (0)" in content
@@ -264,25 +264,25 @@ class TestSummarize:
             summary="",
             token_usage=0,
         )
-        
+
         result = summarize(report, test_config)
         assert result == "Empty run."
 
     def test_summarize_llm_success(self, sample_report: RunReport, test_config: Config, mock_openai) -> None:
         """Test successful LLM summarization."""
         mock_openai.responses.append("All tasks completed successfully.")
-        
+
         result = summarize(sample_report, test_config)
-        
+
         assert result == "All tasks completed successfully."
 
     def test_summarize_llm_failure_fallback(self, sample_report: RunReport, test_config: Config) -> None:
         """Test that LLM failure falls back to deterministic summary."""
         with patch("openai.OpenAI") as mock_openai_class:
             mock_openai_class.side_effect = Exception("API error")
-            
+
             result = summarize(sample_report, test_config)
-            
+
             # Should return deterministic summary, not raise
             assert "done" in result
             assert "parked" in result
@@ -293,9 +293,9 @@ class TestSummarize:
         """Test that missing API key falls back gracefully."""
         with patch("nocturne.config.get_api_key") as mock_get_key:
             mock_get_key.side_effect = Exception("Missing API key")
-            
+
             result = summarize(sample_report, test_config)
-            
+
             # Should return deterministic summary
             assert "done" in result
 
@@ -313,9 +313,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert result.startswith("🟢")
         assert "1 done" in result
         assert "0 parked" in result
@@ -333,9 +333,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert result.startswith("🟡")
         assert "1 parked" in result
 
@@ -351,9 +351,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert result.startswith("🔴")
         assert "2 errors" in result
 
@@ -381,7 +381,7 @@ class TestDiscordMessage:
             )
             for i in range(1, 20)
         ]
-        
+
         report = RunReport(
             started_at=datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc),
             ended_at=datetime(2026, 6, 8, 12, 5, tzinfo=timezone.utc),
@@ -392,9 +392,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert len(result) <= 280
         if len(result) == 280:
             assert result.endswith("...")
@@ -411,9 +411,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert "PR: https://github.com/owner/repo/pull/42" in result
 
     def test_discord_message_no_pr_url(self, sample_task: Task) -> None:
@@ -436,7 +436,7 @@ class TestDiscordMessage:
             attempts=1,
             pr_url=None,
         )
-        
+
         report = RunReport(
             started_at=datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc),
             ended_at=datetime(2026, 6, 8, 12, 5, tzinfo=timezone.utc),
@@ -447,9 +447,9 @@ class TestDiscordMessage:
             summary="",
             token_usage=0,
         )
-        
+
         result = discord_message(report)
-        
+
         assert "PR:" not in result
 
 

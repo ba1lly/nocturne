@@ -13,11 +13,22 @@ import pytest
 from typer.testing import CliRunner
 
 from nocturne.cli import app
-from nocturne.config import Config, PersonaConfig, RepoConfig, ProviderConfig, ModelsConfig
-from nocturne.config import GitHubConfig, SandboxConfig, OpenCodeConfig, GuardrailsConfig
-from nocturne.config import DiscordConfig, DaemonConfig, ReviewConfig, HealthcheckConfig
+from nocturne.config import (
+    Config,
+    DaemonConfig,
+    DiscordConfig,
+    GitHubConfig,
+    GuardrailsConfig,
+    HealthcheckConfig,
+    ModelsConfig,
+    OpenCodeConfig,
+    PersonaConfig,
+    ProviderConfig,
+    RepoConfig,
+    ReviewConfig,
+    SandboxConfig,
+)
 from nocturne.models import Task
-
 
 runner = CliRunner()
 

@@ -10,9 +10,7 @@ from typing import Iterator
 import pytest
 
 from nocturne.store import Store
-
 from tests.fakes import FakeOpenAI, RecordingSubprocess
-
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
 

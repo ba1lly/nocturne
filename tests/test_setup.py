@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+
 import pytest
 import yaml
 
@@ -25,14 +26,14 @@ def test_setup_non_interactive_writes_config(tmp_path):
         "--api-key-env", "TEST_API_KEY",
         "--config-dir", str(config_dir)
     )
-    
+
     assert result.returncode == 0
     config_file = config_dir / "config.yaml"
     assert config_file.exists()
-    
+
     with open(config_file) as f:
         cfg = yaml.safe_load(f)
-    
+
     assert cfg["github"]["owner"] == "test-owner"
     assert cfg["sandbox"]["repo_name"] == "test-sandbox"
     assert cfg["discord"]["channel_id"] == 12345
@@ -55,7 +56,7 @@ def test_setup_existing_config_rejected_without_force(tmp_path):
     config_dir.mkdir()
     config_file = config_dir / "config.yaml"
     config_file.write_text("existing: config")
-    
+
     result = run_setup(
         "--non-interactive",
         "--owner", "test-owner",
@@ -70,7 +71,7 @@ def test_setup_force_overwrites(tmp_path):
     config_dir.mkdir()
     config_file = config_dir / "config.yaml"
     config_file.write_text("existing: config")
-    
+
     result = run_setup(
         "--non-interactive",
         "--owner", "test-owner",
@@ -79,7 +80,7 @@ def test_setup_force_overwrites(tmp_path):
     )
     assert result.returncode == 0
     assert config_file.read_text() != "existing: config"
-    
+
     with open(config_file) as f:
         cfg = yaml.safe_load(f)
     assert cfg["github"]["owner"] == "test-owner"
@@ -95,14 +96,14 @@ def test_no_hardcoded_owner_in_production():
     # We exclude comments containing "# test fixture" or "# example"
     # We also exclude the setup.sh itself since it contains the replacement logic
     # and config.example.yaml since it's the template.
-    
+
     result = subprocess.run(
         ["grep", "-rn", "ba1lly/", "nocturne/", "scripts/"],
         capture_output=True,
         text=True,
         cwd=repo_root
     )
-    
+
     lines = result.stdout.splitlines()
     filtered_lines = []
     for line in lines:
@@ -114,5 +115,5 @@ def test_no_hardcoded_owner_in_production():
         if "scripts/m" in line and "_acceptance.sh" in line:
             continue
         filtered_lines.append(line)
-    
+
     assert not filtered_lines, f"Found hardcoded 'ba1lly/' in production code:\n" + "\n".join(filtered_lines)

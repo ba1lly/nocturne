@@ -7,7 +7,6 @@ from typing import Any, Literal, Optional, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 MODEL_PATTERN = r"^[a-z][a-z0-9-]*/[a-zA-Z0-9._-]+$"
 REPO_SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
 

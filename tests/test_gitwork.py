@@ -20,9 +20,7 @@ from nocturne.gitwork import (
     prune_worktrees,
 )
 from nocturne.guardrails import GuardrailViolation
-
 from tests.fakes import FakeGhResult, RecordingSubprocess, make_subprocess_result
-
 
 HOOK_PATH = Path(gitwork.__file__).parent / "_hooks" / "pre-push"
 ZERO_SHA = "0000000000000000000000000000000000000000"

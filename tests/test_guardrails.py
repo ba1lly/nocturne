@@ -11,8 +11,8 @@ import pytest
 
 from nocturne.config import (
     Config,
-    DiscordConfig,
     DaemonConfig,
+    DiscordConfig,
     GitHubConfig,
     GuardrailsConfig,
     HealthcheckConfig,

@@ -33,7 +33,6 @@ from nocturne.config import (
 )
 from nocturne.models import Task, TriageResult
 
-
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
 # ---------------------------------------------------------------------------
