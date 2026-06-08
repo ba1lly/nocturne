@@ -154,32 +154,33 @@ if ! $NON_INTERACTIVE; then
   read -rp "Override report model [$REASONING_MODEL]: " input
   REPORT_MODEL="${input:-$REASONING_MODEL}"
 
-  # 5. Discord — explicit guidance
+  # 5. Discord HITL
   echo ""
   echo "Discord HITL (parked-task notifications + slash commands):"
-  echo "  This script writes only the channel ID + user ID + env var NAME"
-  echo "  to config.yaml. You MUST export NOCTURNE_DISCORD_TOKEN in your shell"
-  echo "  separately (e.g. add it to ~/.bashrc) — or skip Discord entirely by"
-  echo "  leaving channel/user as 0."
-  echo ""
-  read -rp "Discord channel ID (0 to skip Discord) [$DISCORD_CHANNEL]: " input
+  echo "  Set channel ID + user ID to 0 to skip Discord entirely."
+  read -rp "Discord channel ID (0 to skip) [$DISCORD_CHANNEL]: " input
   DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
   read -rp "Discord mention user ID (0 to skip) [$DISCORD_USER]: " input
   DISCORD_USER="${input:-$DISCORD_USER}"
 
-  # 6. Reviewer skill
+  # 6. Token values — inline. Writes ~/.config/nocturne/env (mode 600) if provided.
+  echo ""
+  echo "Token values (input HIDDEN; press Enter to skip and set via shell export later)."
+  echo "If you provide any value, it will be written to ~/.config/nocturne/env (mode 600,"
+  echo "loaded by the systemd unit via EnvironmentFile= and exportable in your shell)."
+  read -srp "  $API_KEY_ENV: " API_KEY_VALUE; echo
+  if [ "$DISCORD_CHANNEL" != "0" ]; then
+    read -srp "  NOCTURNE_DISCORD_TOKEN (Discord bot token): " DISCORD_TOKEN_VALUE; echo
+  fi
+  if [ -n "${API_KEY_VALUE:-}" ] || [ -n "${DISCORD_TOKEN_VALUE:-}" ]; then
+    WRITE_ENV_FILE=true
+  fi
+
+  # 7. Reviewer skill
   if [ -d "$HOME/.agents/skills/reviewer" ]; then
     read -rp "Install reviewer skill from ~/.agents/skills/reviewer/? [y/N]: " input
     [[ "$input" =~ ^[Yy]$ ]] && INSTALL_REVIEWER=true
   fi
-
-  # 7. Optional env file (for systemd)
-  echo ""
-  echo "Optionally, write ~/.config/nocturne/env (KEY=VALUE pairs) for the systemd unit"
-  echo "to pick up via EnvironmentFile. This file will contain ACTUAL TOKENS — be sure"
-  echo "your home dir is private (chmod 700 ~/.config/nocturne)."
-  read -rp "Write env file with actual tokens? [y/N]: " input
-  [[ "$input" =~ ^[Yy]$ ]] && WRITE_ENV_FILE=true
 fi
 
 # -- Resolve API_KEY_ENV from provider if not explicitly set --
@@ -307,21 +308,17 @@ if $INSTALL_REVIEWER; then
   fi
 fi
 
-# -- Optional ~/.config/nocturne/env writer (for systemd) --
+# -- Write ~/.config/nocturne/env (for systemd + shell sourcing) --
 ENV_FILE="$CONFIG_DIR/env"
-if $WRITE_ENV_FILE && ! $NON_INTERACTIVE; then
-  echo ""
-  echo "Writing ~/.config/nocturne/env (KEY=VALUE pairs for systemd):"
-  read -srp "  $API_KEY_ENV value (input hidden, leave blank to skip): " API_VAL
-  echo ""
-  read -srp "  NOCTURNE_DISCORD_TOKEN value (input hidden, leave blank to skip): " DISCORD_VAL
-  echo ""
+if $WRITE_ENV_FILE; then
   {
-    [ -n "$API_VAL" ]     && echo "$API_KEY_ENV=$API_VAL"
-    [ -n "$DISCORD_VAL" ] && echo "NOCTURNE_DISCORD_TOKEN=$DISCORD_VAL"
+    [ -n "${API_KEY_VALUE:-}" ]      && printf '%s=%s\n' "$API_KEY_ENV" "$API_KEY_VALUE"
+    [ -n "${DISCORD_TOKEN_VALUE:-}" ] && printf 'NOCTURNE_DISCORD_TOKEN=%s\n' "$DISCORD_TOKEN_VALUE"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
+  echo ""
   echo "  → wrote $ENV_FILE (mode 600)"
+  echo "    To load in your current shell:  set -a; source $ENV_FILE; set +a"
 fi
 
 # -- Validate env vars in current shell --

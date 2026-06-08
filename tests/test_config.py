@@ -26,15 +26,15 @@ def _base_config(checkout_path: Path) -> dict[str, Any]:
         "github": {"owner": "ba1lly"},
         "sandbox": {},
         "providers": {
-            "alibaba": {
+            "alibaba-coding-plan": {
                 "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
                 "api_key_env": "DASHSCOPE_API_KEY",
             }
         },
         "models": {
-            "reasoning": "alibaba/qwen3.6-plus",
-            "coding": "alibaba/qwen3-coder-plus",
-            "report": "alibaba/qwen3.6-plus",
+            "reasoning": "alibaba-coding-plan/qwen3.6-plus",
+            "coding": "alibaba-coding-plan/qwen3-coder-plus",
+            "report": "alibaba-coding-plan/qwen3.6-plus",
         },
         "opencode": {},
         "repos": [

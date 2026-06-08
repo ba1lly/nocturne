@@ -32,11 +32,11 @@ def make_config(*, enabled: bool = False, soul_path: str | None = None) -> Confi
     return Config(
         github=GitHubConfig(owner="octo"),
         sandbox=SandboxConfig(checkout_path=str(PROJECT_DIR)),
-        providers={"alibaba": ProviderConfig(base_url="https://example.invalid", api_key_env="ALIBABA_API_KEY")},
+        providers={"alibaba-coding-plan": ProviderConfig(base_url="https://example.invalid", api_key_env="ALIBABA_API_KEY")},
         models=ModelsConfig(
-            reasoning="alibaba/reasoning",
-            coding="alibaba/coding",
-            report="alibaba/report",
+            reasoning="alibaba-coding-plan/reasoning",
+            coding="alibaba-coding-plan/coding",
+            report="alibaba-coding-plan/report",
         ),
         opencode=OpenCodeConfig(),
         repos=[
@@ -75,7 +75,7 @@ def make_task(
         base="main",
         verify_cmd=verify_cmd,
         require_new_test=require_new_test,
-        coding_model="alibaba/coding",
+        coding_model="alibaba-coding-plan/coding",
         branch=branch,
         status="selected",
         attempts=0,

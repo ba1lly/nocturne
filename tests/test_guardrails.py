@@ -53,11 +53,11 @@ def _config(tmp_path: Path) -> Config:
     return Config(
         github=GitHubConfig(owner="ba1lly"),
         sandbox=SandboxConfig(repo_name="nocturne-playground"),
-        providers={"alibaba": ProviderConfig(base_url="https://example.com", api_key_env="DASHSCOPE_API_KEY")},
+        providers={"alibaba-coding-plan": ProviderConfig(base_url="https://example.com", api_key_env="DASHSCOPE_API_KEY")},
         models=ModelsConfig(
-            reasoning="alibaba/qwen3.6-plus",
-            coding="alibaba/qwen3-coder-plus",
-            report="alibaba/qwen3.6-plus",
+            reasoning="alibaba-coding-plan/qwen3.6-plus",
+            coding="alibaba-coding-plan/qwen3-coder-plus",
+            report="alibaba-coding-plan/qwen3.6-plus",
         ),
         opencode=OpenCodeConfig(),
         repos=[repo],
