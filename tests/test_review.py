@@ -68,12 +68,14 @@ def _patch_opencode(
 # ---------- Tests ----------
 
 
-def test_review_falls_back_to_opencode_default_when_skill_unavailable(
+def test_review_falls_back_to_opencode_builtin_review_when_skill_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """When the named skill isn't installed AND each fallback repo is inaccessible,
-    review_pr must NOT raise — it falls back to the opencode-default prompt and
-    reports skill_used='opencode-default'."""
+    review_pr must NOT raise. It falls back to opencode's BUILT-IN /review
+    slash command (per opencode's command/index.ts and template/review.txt)
+    rather than rendering a competing custom prompt that nocturne would have
+    to maintain."""
     from nocturne.skills import SkillInvalid
 
     _patch_skill_enabled(monkeypatch, False)
@@ -82,29 +84,59 @@ def test_review_falls_back_to_opencode_default_when_skill_unavailable(
         lambda repo, force=False: (_ for _ in ()).throw(SkillInvalid(f"no access to {repo}")),
     )
     _patch_diff(monkeypatch, "diff --git a/x b/x\n+hello\n")
-    ndjson = _ndjson_text_event("```json\n[]\n```")
-    captured_prompts: list[str] = []
+    captured_args: list[list[str]] = []
     orig_run = subprocess.run
 
     def fake_run(args, **kwargs):
         if isinstance(args, (list, tuple)) and len(args) > 0 and args[0] == "git":
             return orig_run(args, **kwargs)
-        for i, a in enumerate(args):
-            if a == "-f" and i + 1 < len(args):
-                captured_prompts.append(Path(args[i + 1]).read_text(encoding="utf-8"))
-                break
-        return _fake_completed(stdout=ndjson)
+        captured_args.append(list(args))
+        return _fake_completed(stdout=_ndjson_text_event("```json\n[]\n```"))
 
     monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
 
     cfg = _cfg()
-    result = review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
+    pr_url = "https://github.com/x/y/pull/1"
+    result = review_pr(pr_url, tmp_path, cfg)
 
-    assert result.skill_used == "opencode-default"
+    assert result.skill_used == f"opencode-builtin:{cfg.review.fallback_slash_command}"
     assert result.clean is True
-    assert len(captured_prompts) == 1
-    assert "You are running the" not in captured_prompts[0]
-    assert "no specialised reviewer skill" in captured_prompts[0].lower()
+    assert len(captured_args) == 1
+    args = captured_args[0]
+    assert "--command" in args
+    assert args[args.index("--command") + 1] == cfg.review.fallback_slash_command
+    assert pr_url in args
+    assert "-f" not in args, "must NOT render a custom prompt file; delegate to opencode's built-in /review"
+
+
+def test_review_fallback_slash_command_is_configurable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """cfg.review.fallback_slash_command lets the operator override the
+    fallback slash command (defaults to 'review' for opencode's built-in)."""
+    from nocturne.skills import SkillInvalid
+
+    _patch_skill_enabled(monkeypatch, False)
+    monkeypatch.setattr(
+        "nocturne.review.install_skill_from_github",
+        lambda repo, force=False: (_ for _ in ()).throw(SkillInvalid("no access")),
+    )
+    _patch_diff(monkeypatch, "diff --git a/x b/x\n+hi\n")
+    captured: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        if isinstance(args, (list, tuple)) and len(args) > 0 and args[0] == "git":
+            return subprocess.run(args, **kwargs)
+        captured.append(list(args))
+        return _fake_completed(stdout=_ndjson_text_event("```json\n[]\n```"))
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+
+    cfg = _cfg()
+    cfg.review.fallback_slash_command = "my-fallback-cmd"
+    review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
+
+    assert captured[0][captured[0].index("--command") + 1] == "my-fallback-cmd"
 
 
 def test_review_clean_returns_no_findings(

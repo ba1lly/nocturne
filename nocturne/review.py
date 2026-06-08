@@ -14,7 +14,6 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-import jinja2
 from pydantic import BaseModel, Field
 
 from nocturne._logging import get_logger
@@ -55,31 +54,6 @@ class ReviewResult(BaseModel):
     raw_output: str = ""
     attempts: int = 1
     skill_used: str = ""
-
-
-_TEMPLATE_DIR = Path(__file__).parent / "prompts"
-_TEMPLATE_PATH = _TEMPLATE_DIR / "review_invocation.md.jinja2"
-_DEFAULT_TEMPLATE_PATH = _TEMPLATE_DIR / "review_invocation_default.md.jinja2"
-
-
-def _jinja_env() -> jinja2.Environment:
-    return jinja2.Environment(
-        loader=jinja2.FileSystemLoader(_TEMPLATE_DIR),
-        autoescape=False,
-        keep_trailing_newline=True,
-    )
-
-
-def _load_template() -> jinja2.Template:
-    return _jinja_env().get_template(_TEMPLATE_PATH.name)
-
-
-def _render_review_prompt(skill_name: str, pr_url: str, diff: str) -> str:
-    return _load_template().render(skill_name=skill_name, pr_url=pr_url, diff=diff)
-
-
-def _render_default_review_prompt(pr_url: str, diff: str) -> str:
-    return _jinja_env().get_template(_DEFAULT_TEMPLATE_PATH.name).render(pr_url=pr_url, diff=diff)
 
 
 def _ensure_reviewer_skill(cfg: Config) -> tuple[Optional[str], bool]:
@@ -212,7 +186,7 @@ def review_pr(
             f"set review.use_opencode_default_when_unavailable=true to permit fallback."
         )
 
-    skill_used = skill_name_or_none or "opencode-default"
+    skill_used = skill_name_or_none or f"opencode-builtin:{cfg.review.fallback_slash_command}"
 
     diff = _compute_diff(worktree, base=base)
     if not diff.strip():
@@ -221,34 +195,20 @@ def review_pr(
             clean=True, findings=[], raw_output="", attempts=1, skill_used=skill_used,
         )
 
-    prompt_path: Optional[str] = None
-    if used_default:
-        prompt = _render_default_review_prompt(pr_url, diff)
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", dir=None, delete=False,
-        ) as f:
-            f.write(prompt)
-            prompt_path = f.name
-        opencode_args = [
-            cfg.opencode.command, "run",
-            "--model", cfg.models.reasoning,
-            "--dir", str(worktree),
-            "--format", "json",
-            "-f", prompt_path,
-        ]
-    else:
-        opencode_args = [
-            cfg.opencode.command, "run",
-            "--dir", str(worktree),
-            "--format", "json",
-            "--command", cfg.review.slash_command,
-            "--",
-            pr_url,
-        ]
+    slash_command = (
+        cfg.review.fallback_slash_command if used_default else cfg.review.slash_command
+    )
 
     try:
         result = subprocess.run(
-            opencode_args,
+            [
+                cfg.opencode.command, "run",
+                "--dir", str(worktree),
+                "--format", "json",
+                "--command", slash_command,
+                "--",
+                pr_url,
+            ],
             capture_output=True, text=True,
             timeout=cfg.opencode.timeout_min * 60,
             check=False,
@@ -260,12 +220,6 @@ def review_pr(
             clean=False, findings=[], raw_output="timeout",
             attempts=1, skill_used=skill_used,
         )
-    finally:
-        if prompt_path is not None:
-            try:
-                Path(prompt_path).unlink(missing_ok=True)
-            except Exception:
-                pass
 
     # Extract text from OpenCode's --format json NDJSON output.
     # Each line is a JSON event; we collect "text" or "content" fields.
