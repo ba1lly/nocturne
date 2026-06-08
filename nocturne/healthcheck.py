@@ -112,8 +112,8 @@ class Healthcheck:
                 counts[s] = 0
         # Prometheus exposition format
         lines = [
-            f"# HELP nocturne_tasks Total tasks by status",
-            f"# TYPE nocturne_tasks gauge",
+            "# HELP nocturne_tasks Total tasks by status",
+            "# TYPE nocturne_tasks gauge",
         ]
         for status, n in counts.items():
             lines.append(f'nocturne_tasks{{status="{status}"}} {n}')

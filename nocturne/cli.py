@@ -171,7 +171,7 @@ def version() -> None:
 @app.command()
 def status() -> None:
     """Show daemon and task queue status."""
-    cfg = _load_cfg(_state.config)
+    _load_cfg(_state.config)  # validates config exists + parses
     _state.state_dir.mkdir(parents=True, exist_ok=True)
     store = Store(_state.state_dir / "nocturne.db")
 
@@ -297,7 +297,7 @@ def daemon(
 @app.command()
 def pause() -> None:
     """Pause the running daemon (cross-process via SQLite flag)."""
-    cfg = _load_cfg(_state.config)
+    _load_cfg(_state.config)  # validates config exists + parses
     _state.state_dir.mkdir(parents=True, exist_ok=True)
     store = Store(_state.state_dir / "nocturne.db")
     store.set_daemon_flag("paused", "1")
@@ -311,7 +311,7 @@ def unpause() -> None:
     Named 'unpause' (NOT 'resume') to avoid collision with `nocturne resume --task-id ...`
     which is for parked-task resume.
     """
-    cfg = _load_cfg(_state.config)
+    _load_cfg(_state.config)  # validates config exists + parses
     _state.state_dir.mkdir(parents=True, exist_ok=True)
     store = Store(_state.state_dir / "nocturne.db")
     store.set_daemon_flag("paused", "0")

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import jinja2
 
 from nocturne.models import RunReport
 from nocturne.config import Config, get_api_key, provider_of
 from nocturne._logging import get_logger
+
+if TYPE_CHECKING:
+    from nocturne.models import Task
 
 logger = get_logger("nocturne.reporter")
 
