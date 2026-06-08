@@ -77,8 +77,8 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v sqlite3 >/dev/null 2>&1; then
-    echo "FAIL: sqlite3 not found"
+if ! python3 -c "import sqlite3" 2>/dev/null; then
+    echo "FAIL: python3 stdlib sqlite3 module not available"
     exit 1
 fi
 
@@ -195,7 +195,8 @@ echo ">>> Test 3: Reviewer post-PR loop"
 bash scripts/bootstrap_sandbox.sh > /dev/null 2>&1 || true
 
 # Close any prior PRs
-gh pr list --repo "$REPO" --search "head:nocturne/" --state open --json url --jq '.[].url' 2>/dev/null \
+gh pr list --repo "$REPO" --state open --json url,headRefName \
+    --jq '.[] | select(.headRefName | startswith("nocturne/")) | .url' 2>/dev/null \
     | xargs -r -I{} gh pr close {} --delete-branch 2>/dev/null || true
 
 # Create state dir for this test
@@ -214,15 +215,25 @@ echo "  Phase A: waiting for Issue #1 to be processed..."
 PHASE_A_DEADLINE=$((SECONDS + 600))
 PR_URL=""
 while [ $SECONDS -lt $PHASE_A_DEADLINE ]; do
-    PR_URL=$(sqlite3 /tmp/m5-review-state/nocturne.db \
-        "SELECT pr_url FROM tasks WHERE issue_number=1 AND status='done' AND pr_url IS NOT NULL" 2>/dev/null || true)
+    PR_URL=$(DB_PATH=/tmp/m5-review-state/nocturne.db python3 << 'PYEOF' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+row = db.execute("SELECT pr_url FROM tasks WHERE issue_number=1 AND status='done' AND pr_url IS NOT NULL").fetchone()
+print(row[0] if row else '')
+PYEOF
+)
     [ -n "$PR_URL" ] && break
     sleep 10
 done
 
 if [ -z "$PR_URL" ]; then
     echo "FAIL: Issue #1 not done after 10min"
-    sqlite3 /tmp/m5-review-state/nocturne.db "SELECT issue_number, status, pr_url FROM tasks" 2>/dev/null || true
+    DB_PATH=/tmp/m5-review-state/nocturne.db python3 << 'PYEOF' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+for row in db.execute("SELECT issue_number, status, pr_url FROM tasks").fetchall():
+    print('\t'.join(str(c) if c is not None else 'NULL' for c in row))
+PYEOF
     exit 1
 fi
 
@@ -234,15 +245,28 @@ echo "  Phase B: waiting for review_runs to complete..."
 PHASE_B_DEADLINE=$((SECONDS + 600))
 ENDED=""
 while [ $SECONDS -lt $PHASE_B_DEADLINE ]; do
-    ENDED=$(sqlite3 /tmp/m5-review-state/nocturne.db \
-        "SELECT ended_at FROM review_runs WHERE pr_url='$PR_URL' ORDER BY started_at DESC LIMIT 1" 2>/dev/null || true)
+    ENDED=$(DB_PATH=/tmp/m5-review-state/nocturne.db PR_URL="$PR_URL" python3 << 'PYEOF' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+row = db.execute(
+    "SELECT ended_at FROM review_runs WHERE pr_url=? ORDER BY started_at DESC LIMIT 1",
+    (os.environ['PR_URL'],),
+).fetchone()
+print(row[0] if row and row[0] is not None else '')
+PYEOF
+)
     [ -n "$ENDED" ] && break
     sleep 10
 done
 
 if [ -z "$ENDED" ]; then
     echo "FAIL: review_runs not completed after 10min"
-    sqlite3 /tmp/m5-review-state/nocturne.db "SELECT pr_url, started_at, ended_at FROM review_runs" 2>/dev/null || true
+    DB_PATH=/tmp/m5-review-state/nocturne.db python3 << 'PYEOF' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+for row in db.execute("SELECT pr_url, started_at, ended_at FROM review_runs").fetchall():
+    print('\t'.join(str(c) if c is not None else 'NULL' for c in row))
+PYEOF
     exit 1
 fi
 
@@ -262,8 +286,12 @@ gh api "repos/$REPO/events" --jq '.[] | select(.payload.forced==true)' | head -1
 
 # Assertion 3: review_runs row exists
 echo "  Assertion 3: checking review_runs row..."
-REVIEW_COUNT=$(sqlite3 /tmp/m5-review-state/nocturne.db \
-    "SELECT COUNT(*) FROM review_runs WHERE pr_url='$PR_URL'")
+REVIEW_COUNT=$(DB_PATH=/tmp/m5-review-state/nocturne.db PR_URL="$PR_URL" python3 << 'PYEOF'
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+print(db.execute("SELECT COUNT(*) FROM review_runs WHERE pr_url=?", (os.environ['PR_URL'],)).fetchone()[0])
+PYEOF
+)
 [ "$REVIEW_COUNT" -ge 1 ] || { echo "FAIL: no review_runs row"; exit 1; }
 
 # Cleanup daemon
@@ -333,8 +361,13 @@ curl -sS http://127.0.0.1:8765/health | jq -r '.status' | grep -q "^healthy$" \
     | grep -qi "pause flag set" || { echo "FAIL: pause command output unexpected"; exit 1; }
 
 # Verify flag persisted
-sqlite3 /tmp/m5-state/nocturne.db "SELECT value FROM daemon_state WHERE key='paused'" \
-    | grep -q "^1$" || { echo "FAIL: pause flag not persisted"; exit 1; }
+DB_PATH=/tmp/m5-state/nocturne.db python3 << 'PYEOF' | grep -q "^1$" \
+    || { echo "FAIL: pause flag not persisted"; exit 1; }
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+row = db.execute("SELECT value FROM daemon_state WHERE key='paused'").fetchone()
+print(row[0] if row else '')
+PYEOF
 
 # Wait for staleness threshold
 sleep 4
@@ -372,7 +405,7 @@ echo "Test 5 PASS"
 echo ">>> Test 6: Multi-provider validation"
 
 cat > /tmp/m5-bad-config.yaml <<EOF
-$(sed -e 's|coding:.*|coding: "openai/gpt-5"|' "$CONFIG")
+$(sed -e 's|reasoning:.*|reasoning: "openai/gpt-5"|' "$CONFIG")
 EOF
 
 .venv/bin/nocturne --config /tmp/m5-bad-config.yaml run-once --repo "$REPO" --issue 1 2>&1 \
