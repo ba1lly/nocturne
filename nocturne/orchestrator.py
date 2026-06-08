@@ -93,10 +93,11 @@ def _read_pr_body(worktree: Path, task: Task) -> tuple[str, str]:
 def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Task:
     log = get_logger("nocturne.orchestrator")
 
-    # Guardrail: repo allowlist (propagates GuardrailViolation before any side effect).
     _repo_cfg = check_repo_allowed(task.repo_slug, cfg)
 
-    # Bump attempts once for this task invocation (single worktree per process_task call).
+    if store.get_task(task.id) is None:
+        store.insert_task(task)
+
     store.increment_attempts(task.id)
     task.attempts += 1
     store.update_status(task.id, "running")

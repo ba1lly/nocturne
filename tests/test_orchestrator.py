@@ -700,6 +700,51 @@ def test_run_batch_mixed_fresh_resumed_and_done(
     assert report.errors == []
 
 
+def test_process_task_inserts_task_if_missing_from_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    """Regression guard for the daemon-reprocess loop observed in M5 Test 3
+    (the run that produced PR #30 then thrashed forever on issue #1).
+
+    process_task is called from TWO paths:
+      - orchestrator.run_batch via _dispatch_triaged, which DOES insert.
+      - daemon.run_one_cycle directly, which did NOT insert.
+
+    Without insert, the next daemon cycle's partition_eligible sees
+    get_task(id) == None and re-queues the same issue forever. The cleanest
+    fix is to make process_task self-sufficient: insert if missing, no-op
+    if already there. Belt + suspenders for both call paths.
+    """
+    _patch_all(monkeypatch)
+    fresh_task = _make_task(tmp_worktree, task_id="ba1lly/repo#daemon-fresh").model_copy(
+        update={"issue_number": 99},
+    )
+    assert inmem_store.get_task(fresh_task.id) is None, "precondition: task not in store"
+
+    orchestrator.process_task(fresh_task, cfg, inmem_store)
+
+    persisted = inmem_store.get_task(fresh_task.id)
+    assert persisted is not None, "process_task must insert when row is missing"
+    assert persisted.status == "done"
+
+
+def test_process_task_does_not_double_insert_when_task_already_in_store(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
+) -> None:
+    """The defensive insert must be a no-op if the row already exists,
+    so the run_batch path (which inserts via _dispatch_triaged before
+    calling process_task) doesn't blow up on UNIQUE."""
+    _patch_all(monkeypatch)
+    assert inmem_store.get_task(task.id) is not None, \
+        "precondition: 'task' fixture pre-inserts via inmem_store.insert_task"
+
+    orchestrator.process_task(task, cfg, inmem_store)
+
+    persisted = inmem_store.get_task(task.id)
+    assert persisted is not None
+    assert persisted.status == "done"
+
+
 def test_process_task_writes_review_runs_row_on_success(
     monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
 ) -> None:
