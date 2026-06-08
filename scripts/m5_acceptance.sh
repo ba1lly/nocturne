@@ -154,8 +154,12 @@ echo ">>> Test 1: Skill install"
 .venv/bin/nocturne skill list | grep -q reviewer || { echo "FAIL: reviewer skill not listed"; exit 1; }
 
 # Re-install rejected without --force
-.venv/bin/nocturne skill install ~/.agents/skills/reviewer/ 2>&1 | grep -qi "already installed" \
-    || { echo "FAIL: re-install not rejected"; exit 1; }
+# Note: nocturne exits non-zero on rejected duplicate by design. Capture before
+# greping so 'set -o pipefail' doesn't propagate the (expected) failure exit
+# and short-circuit the success check.
+DUPE_OUTPUT=$(.venv/bin/nocturne skill install ~/.agents/skills/reviewer/ 2>&1) || true
+echo "$DUPE_OUTPUT" | grep -qi "already installed" \
+    || { echo "FAIL: re-install not rejected; output was:"; echo "$DUPE_OUTPUT"; exit 1; }
 
 # Force backup
 .venv/bin/nocturne skill install ~/.agents/skills/reviewer/ --force 2>&1 | tee -a "$EVIDENCE_DIR/milestone-M5-skill-install.log"
@@ -408,9 +412,13 @@ cat > /tmp/m5-bad-config.yaml <<EOF
 $(sed -e 's|reasoning:.*|reasoning: "openai/gpt-5"|' "$CONFIG")
 EOF
 
-.venv/bin/nocturne --config /tmp/m5-bad-config.yaml run-once --repo "$REPO" --issue 1 2>&1 \
-    | tee "$EVIDENCE_DIR/milestone-M5-multi-provider-error.log" \
-    | grep -qi "openai" || { echo "FAIL: openai missing-provider not mentioned"; exit 1; }
+# Note: nocturne exits non-zero on config-validation failure by design. Capture
+# before greping so 'set -o pipefail' doesn't propagate the (expected) failure
+# exit and short-circuit the success check.
+PROV_OUTPUT=$(.venv/bin/nocturne --config /tmp/m5-bad-config.yaml run-once --repo "$REPO" --issue 1 2>&1) || true
+echo "$PROV_OUTPUT" > "$EVIDENCE_DIR/milestone-M5-multi-provider-error.log"
+echo "$PROV_OUTPUT" | grep -qi "openai" \
+    || { echo "FAIL: openai missing-provider not mentioned; output was:"; echo "$PROV_OUTPUT"; exit 1; }
 
 echo "Test 6 PASS"
 
