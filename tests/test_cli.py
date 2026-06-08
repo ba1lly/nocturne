@@ -488,3 +488,208 @@ class TestRunOnceBatch:
             result = runner.invoke(app, ["run-once", "--repo", "ba1lly/playground"])
 
         assert result.exit_code == 1
+
+
+class TestResume:
+    """Test resume command."""
+
+    def test_resume_list_empty(self, tmp_path: Path) -> None:
+        """Test resume --list with no parked tasks."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store"), \
+             patch("nocturne.askflow.list_parked") as mock_list_parked:
+
+            mock_load_cfg.return_value = cfg
+            mock_list_parked.return_value = []
+
+            result = runner.invoke(app, ["resume", "--list"])
+
+        assert result.exit_code == 0
+        assert "no parked tasks" in result.stdout
+
+    def test_resume_list_populated(self, tmp_path: Path) -> None:
+        """Test resume --list with parked tasks."""
+        from nocturne.models import ParkedTask
+
+        cfg = _make_test_config()
+        now = datetime.now(timezone.utc)
+        parked_task = ParkedTask(
+            id="ba1lly/playground#1",
+            status="parked",
+            created_at=now,
+            updated_at=now,
+            repo_slug="ba1lly/playground",
+            checkout_path="/home/bailly/projects/nocturne",
+            issue_number=1,
+            title="Test issue",
+            body="Test body",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=True,
+            coding_model="dashscope/qwen-coder-32b-latest",
+            branch="",
+            attempts=0,
+            question="What should I do?",
+            parked_at=now,
+        )
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store"), \
+             patch("nocturne.askflow.list_parked") as mock_list_parked:
+
+            mock_load_cfg.return_value = cfg
+            mock_list_parked.return_value = [parked_task]
+
+            result = runner.invoke(app, ["resume", "--list"])
+
+        assert result.exit_code == 0
+        assert "ba1lly/playground#1" in result.stdout
+        assert "What should I do?" in result.stdout
+
+    def test_resume_missing_task_id_exits_2(self, tmp_path: Path) -> None:
+        """Test resume without --task-id and without --list exits 2."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+
+            result = runner.invoke(app, ["resume"])
+
+        assert result.exit_code == 2
+        assert "--task-id required" in result.stdout or "--task-id required" in result.stderr
+
+    def test_resume_invalid_task_id_format_exits_2(self, tmp_path: Path) -> None:
+        """Test resume with invalid task_id format exits 2."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+
+            result = runner.invoke(app, ["resume", "--task-id", "foo"])
+
+        assert result.exit_code == 2
+        assert "invalid task_id format" in result.stdout or "invalid task_id format" in result.stderr
+
+    def test_resume_task_not_found_exits_1(self, tmp_path: Path) -> None:
+        """Test resume with non-existent task exits 1."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.get_task.return_value = None
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["resume", "--task-id", "ba1lly/playground#1", "--answer", "go ahead"])
+
+        assert result.exit_code == 1
+        assert "task not found" in result.stdout or "task not found" in result.stderr
+
+    def test_resume_task_not_parked_exits_1(self, tmp_path: Path) -> None:
+        """Test resume with non-parked task exits 1."""
+        cfg = _make_test_config()
+        task = _make_test_task()
+        task.status = "selected"
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.get_task.return_value = task
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["resume", "--task-id", "ba1lly/playground#1", "--answer", "go ahead"])
+
+        assert result.exit_code == 1
+        assert "is not parked" in result.stdout or "is not parked" in result.stderr
+
+    def test_resume_invokes_askflow_with_answer(self, tmp_path: Path) -> None:
+        """Test resume invokes askflow.resume_with_answer with correct args."""
+        cfg = _make_test_config()
+        task = _make_test_task()
+        task.status = "parked"
+        task.question = "What should I do?"
+        result_task = task.model_copy(update={"status": "selected"})
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store") as mock_store_class, \
+             patch("nocturne.askflow.resume_with_answer") as mock_resume:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.get_task.return_value = task
+            mock_store_class.return_value = mock_store
+            mock_resume.return_value = result_task
+
+            result = runner.invoke(app, ["resume", "--task-id", "ba1lly/playground#1", "--answer", "go ahead"])
+
+        assert result.exit_code == 0
+        assert "Resumed task" in result.stdout
+        mock_resume.assert_called_once_with("ba1lly/playground#1", "go ahead", cfg, mock_store)
+
+    def test_resume_interactive_prompt_when_no_answer(self, tmp_path: Path) -> None:
+        """Test resume prompts interactively when --answer not provided."""
+        cfg = _make_test_config()
+        task = _make_test_task()
+        task.status = "parked"
+        task.question = "What should I do?"
+        result_task = task.model_copy(update={"status": "selected"})
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store") as mock_store_class, \
+             patch("nocturne.askflow.resume_with_answer") as mock_resume, \
+             patch("nocturne.cli.typer.prompt") as mock_prompt:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.get_task.return_value = task
+            mock_store_class.return_value = mock_store
+            mock_prompt.return_value = "interactive answer"
+            mock_resume.return_value = result_task
+
+            result = runner.invoke(app, ["resume", "--task-id", "ba1lly/playground#1"])
+
+        assert result.exit_code == 0
+        assert "Resumed task" in result.stdout
+        mock_prompt.assert_called_once()
+        mock_resume.assert_called_once_with("ba1lly/playground#1", "interactive answer", cfg, mock_store)
+
+    def test_resume_empty_answer_exits_2(self, tmp_path: Path) -> None:
+        """Test resume with empty answer exits 2."""
+        cfg = _make_test_config()
+        task = _make_test_task()
+        task.status = "parked"
+        task.question = "What should I do?"
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.Store") as mock_store_class, \
+             patch("nocturne.cli.typer.prompt") as mock_prompt:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.get_task.return_value = task
+            mock_store_class.return_value = mock_store
+            mock_prompt.return_value = ""
+
+            result = runner.invoke(app, ["resume", "--task-id", "ba1lly/playground#1"])
+
+        assert result.exit_code == 2
+        assert "cannot be empty" in result.stdout or "cannot be empty" in result.stderr

@@ -292,3 +292,82 @@ def soul_edit() -> None:
         raise typer.Exit(2)
 
     typer.echo(f"Edited {dest}")
+
+
+@app.command()
+def resume(
+    task_id: str | None = typer.Option(None, "--task-id", "-t", help="Parked task id (e.g., owner/repo#123)"),
+    answer: str | None = typer.Option(None, "--answer", "-a", help="Answer text (if omitted, prompted interactively)"),
+    list_parked: bool = typer.Option(False, "--list", "-l", help="List all parked tasks"),
+) -> None:
+    """Resume a parked task with a human answer, OR list all parked tasks via --list."""
+    cfg = _load_cfg(_state.config)
+    setup_logging(_state.state_dir, "DEBUG" if _state.verbose else "INFO")
+    _state.state_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(_state.state_dir / "nocturne.db")
+
+    if list_parked:
+        from nocturne.askflow import list_parked as _list_parked
+
+        parked = _list_parked(store)
+        if not parked:
+            typer.echo("(no parked tasks)")
+            return
+
+        # Use rich Table for clean output
+        from rich.table import Table
+        from rich.console import Console
+
+        table = Table(title=f"Parked tasks ({len(parked)})")
+        table.add_column("Task ID", style="cyan", no_wrap=False)
+        table.add_column("Issue", style="green")
+        table.add_column("Title", style="white", no_wrap=False, max_width=40)
+        table.add_column("Question", style="yellow", no_wrap=False, max_width=60)
+        for p in parked:
+            q = (p.question or "")[:200] + ("..." if p.question and len(p.question) > 200 else "")
+            title = (p.title or "")[:38] + ("..." if p.title and len(p.title) > 38 else "")
+            table.add_row(p.id, f"#{p.issue_number}", title, q)
+        Console().print(table)
+        return
+
+    if not task_id:
+        typer.secho("ERROR: --task-id required (or use --list to see parked tasks)", fg="red", err=True)
+        raise typer.Exit(2)
+
+    # Validate task_id format: owner/repo#issue_number
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*#\d+$", task_id):
+        typer.secho(f"ERROR: invalid task_id format (expected owner/repo#N): {task_id}", fg="red", err=True)
+        raise typer.Exit(2)
+
+    # Lookup task before invoking
+    task = store.get_task(task_id)
+    if task is None:
+        typer.secho(f"ERROR: task not found: {task_id}", fg="red", err=True)
+        raise typer.Exit(1)
+    if task.status != "parked":
+        typer.secho(f"ERROR: task {task_id} is not parked (status={task.status})", fg="red", err=True)
+        raise typer.Exit(1)
+
+    # Interactive prompt if --answer not provided
+    if not answer:
+        typer.echo(f"Question for task {task_id}:")
+        typer.echo(f"  {task.question or '(no question recorded)'}")
+        answer = typer.prompt("Your answer", prompt_suffix=": ")
+
+    if not answer or not answer.strip():
+        typer.secho("ERROR: answer cannot be empty", fg="red", err=True)
+        raise typer.Exit(2)
+
+    # Invoke askflow.resume_with_answer
+    from nocturne.askflow import resume_with_answer
+
+    try:
+        result = resume_with_answer(task_id, answer, cfg, store)
+    except Exception as e:
+        typer.secho(f"ERROR: resume failed: {e}", fg="red", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Resumed task {task_id}. Status: {result.status}")
+    # Log at DEBUG (NOT INFO) per plan must-not-do: "Do NOT log the answer at INFO level"
+    log_resume = get_logger("nocturne.cli.resume")
+    log_resume.debug("resumed task %s with answer (len=%s)", task_id, len(answer))
