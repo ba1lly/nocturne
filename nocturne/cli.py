@@ -85,6 +85,65 @@ def _setup_runtime(cfg: Config, state_dir: Path) -> None:
         raise typer.Exit(2)
 
 
+@app.command()
+def setup(
+    owner: str | None = typer.Option(None, "--owner", help="GitHub owner (required in --non-interactive)"),
+    sandbox_repo: str = typer.Option("nocturne-playground", "--sandbox-repo"),
+    provider: str = typer.Option("alibaba-coding-plan", "--provider"),
+    reasoning_model: str | None = typer.Option(None, "--reasoning-model"),
+    coding_model: str | None = typer.Option(None, "--coding-model"),
+    report_model: str | None = typer.Option(None, "--report-model"),
+    discord_channel: str = typer.Option("0", "--discord-channel"),
+    discord_user: str = typer.Option("0", "--discord-user"),
+    api_key_env: str | None = typer.Option(
+        None, "--api-key-env",
+        help="Override the env var name (default depends on provider). MUST be a NAME, not a key value.",
+    ),
+    config_dir: Path = typer.Option(
+        Path.home() / ".config" / "nocturne", "--config-dir"
+    ),
+    install_reviewer: bool = typer.Option(False, "--install-reviewer"),
+    non_interactive: bool = typer.Option(False, "--non-interactive"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Interactive wizard — writes ~/.config/nocturne/config.yaml + optional env file."""
+    from nocturne.setup_wizard import ENV_NAME_RE, PROVIDERS, WizardAnswers, run_wizard
+
+    if provider not in PROVIDERS:
+        typer.secho(
+            f"ERROR: unknown provider '{provider}'. Valid: {', '.join(PROVIDERS)}",
+            fg="red", err=True,
+        )
+        raise typer.Exit(2)
+
+    if api_key_env is not None and not ENV_NAME_RE.match(api_key_env):
+        typer.secho(
+            f"ERROR: --api-key-env must be an ENV VAR NAME like DASHSCOPE_API_KEY, "
+            f"not an actual key value. Got: {api_key_env!r}",
+            fg="red", err=True,
+        )
+        raise typer.Exit(2)
+
+    prefill = WizardAnswers(
+        owner=owner or "",
+        sandbox_repo=sandbox_repo,
+        provider=provider,
+        reasoning_model=reasoning_model or "",
+        coding_model=coding_model or "",
+        report_model=report_model or "",
+        discord_channel=discord_channel,
+        discord_user=discord_user,
+        api_key_env_override=api_key_env,
+        install_reviewer=install_reviewer,
+    )
+    run_wizard(
+        config_dir=config_dir,
+        force=force,
+        non_interactive=non_interactive,
+        prefill=prefill,
+    )
+
+
 @app.command(name="run-once")
 def run_once(
     repo: str = typer.Option(..., "--repo", help="Repository slug (owner/repo)"),

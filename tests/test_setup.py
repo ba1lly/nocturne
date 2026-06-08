@@ -88,7 +88,7 @@ def test_setup_force_overwrites(tmp_path):
 def test_setup_help_shows_usage():
     result = run_setup("--help")
     assert result.returncode == 0
-    assert "Usage: setup.sh" in result.stdout
+    assert "nocturne setup" in result.stdout
 
 def test_no_hardcoded_owner_in_production():
     repo_root = Path(__file__).parent.parent
