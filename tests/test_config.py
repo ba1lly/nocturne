@@ -27,7 +27,7 @@ def _base_config(checkout_path: Path) -> dict[str, Any]:
         "sandbox": {},
         "providers": {
             "alibaba-coding-plan": {
-                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
                 "api_key_env": "DASHSCOPE_API_KEY",
             }
         },

@@ -72,7 +72,7 @@ def cfg(tmp_worktree: Path) -> Config:
         sandbox={"repo_name": "nocturne-playground"},
         providers={
             "alibaba-coding-plan": ProviderConfig(
-                base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                base_url="https://coding-intl.dashscope.aliyuncs.com/v1",
                 api_key_env="DASHSCOPE_API_KEY",
             ),
         },
