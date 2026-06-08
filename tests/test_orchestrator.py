@@ -725,8 +725,9 @@ def test_read_pr_body_parses_title_and_body_from_markdown(
     title, body = _read_pr_body(wt, task)
 
     assert title == "Fix the divide() off-by-one bug"
-    assert "off-by-one" in body
+    assert "divide function returned" in body
     assert "Closes #42" in body
+    assert title not in body, "the H1 title must NOT be duplicated in the body"
 
 
 def test_read_pr_body_falls_back_when_file_missing(tmp_path: Path, tmp_worktree: Path) -> None:
