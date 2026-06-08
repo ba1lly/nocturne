@@ -3,3 +3,9 @@ nocturne.db
 /tmp/nocturne/
 reports/
 .omo/evidence/
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
