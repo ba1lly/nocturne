@@ -117,8 +117,48 @@ def make_worktree(
         )
 
     _install_pre_push_hook(worktree_path)
+    _add_nocturne_local_excludes(worktree_path)
 
     return worktree_path
+
+
+def _add_nocturne_local_excludes(worktree_path: Path) -> None:
+    """Add nocturne-internal artifacts to .git/info/exclude so they never
+    end up in commits, even when commit_push does `git add -A`.
+
+    Excluded:
+      - .nocturne-pr-body.md   (opencode writes the PR title+body here per task.md.jinja2)
+      - .reviews/              (/review-pr persists multi-agent review output here)
+
+    .git/info/exclude is a local-only ignore (not committed), exactly the
+    right scope for nocturne-internal artifacts.
+    """
+    git_dir_result = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "--git-path", "info/exclude"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if git_dir_result.returncode != 0:
+        return
+
+    exclude_rel = git_dir_result.stdout.strip()
+    exclude_path = Path(exclude_rel)
+    if not exclude_path.is_absolute():
+        exclude_path = (worktree_path / exclude_rel).resolve()
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+
+    nocturne_lines = [
+        "# nocturne-internal artifacts (auto-added by nocturne/gitwork)",
+        ".nocturne-pr-body.md",
+        ".reviews/",
+    ]
+    existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+    if ".nocturne-pr-body.md" in existing and ".reviews/" in existing:
+        return
+
+    sep = "" if existing.endswith("\n") or not existing else "\n"
+    exclude_path.write_text(existing + sep + "\n".join(nocturne_lines) + "\n", encoding="utf-8")
 
 
 def commit_push(wt: Path, message: str, base: str) -> None:

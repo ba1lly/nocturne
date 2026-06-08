@@ -120,12 +120,12 @@ def test_sentinel_appears_exactly_once() -> None:
 
 def test_require_new_test_includes_instruction() -> None:
     out = render_task_prompt(make_task(require_new_test=True), make_config())
-    assert "You MUST add at least one test" in out
+    assert "You MUST add at least one new test" in out
 
 
 def test_require_new_test_false_omits_instruction() -> None:
     out = render_task_prompt(make_task(require_new_test=False), make_config())
-    assert "You MUST add at least one test" not in out
+    assert "You MUST add at least one new test" not in out
 
 
 def test_prior_failure_includes_failure_block() -> None:
@@ -144,9 +144,27 @@ def test_forbidden_actions_section_interpolates_branch() -> None:
     assert "Do NOT run `git commit`" in out
     assert "`git push`" in out
     assert "`gh pr`" in out
-    assert "the orchestrator handles staging, committing" in out
+    assert "orchestrator handles all git operations" in out
     assert "You are on branch `nocturne/issue-7-branch`" in out
     assert "do not switch branches or modify `main`" in out
+
+
+def test_template_includes_self_review_workflow() -> None:
+    """Regression guard for Approach 1 (single-session) architecture:
+    the task prompt MUST tell opencode to invoke @reviewer, address every
+    finding, and write .nocturne-pr-body.md."""
+    out = render_task_prompt(make_task(), make_config())
+    assert "@reviewer" in out
+    assert ".nocturne-pr-body.md" in out
+    assert "every severity" in out or "all findings" in out.lower() or "regardless of severity" in out
+    assert "Closes #" in out
+
+
+def test_template_includes_budget_attempts_from_config() -> None:
+    cfg = make_config()
+    cfg.review.budget_attempts = 7
+    out = render_task_prompt(make_task(), cfg)
+    assert "7 times" in out
 
 
 def test_soul_cache_uses_mtime_and_skips_second_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

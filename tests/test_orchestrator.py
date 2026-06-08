@@ -700,6 +700,72 @@ def test_run_batch_mixed_fresh_resumed_and_done(
     assert report.errors == []
 
 
+def test_read_pr_body_parses_title_and_body_from_markdown(
+    tmp_path: Path, tmp_worktree: Path,
+) -> None:
+    """opencode writes .nocturne-pr-body.md per task.md.jinja2 Step 6.
+    First '# ' line is the PR title (and commit subject). Everything below
+    is the GitHub PR body."""
+    from nocturne.orchestrator import _read_pr_body
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".nocturne-pr-body.md").write_text(
+        "# Fix the divide() off-by-one bug\n"
+        "\n"
+        "The divide function returned `a / (b + 1)` instead of `a / b`.\n"
+        "This patch corrects the formula and adds tests for the\n"
+        "acceptance criteria.\n"
+        "\n"
+        "Closes #42\n",
+        encoding="utf-8",
+    )
+    task = _make_task(tmp_worktree, task_id="ba1lly/repo#42").model_copy(update={"issue_number": 42})
+
+    title, body = _read_pr_body(wt, task)
+
+    assert title == "Fix the divide() off-by-one bug"
+    assert "off-by-one" in body
+    assert "Closes #42" in body
+
+
+def test_read_pr_body_falls_back_when_file_missing(tmp_path: Path, tmp_worktree: Path) -> None:
+    from nocturne.orchestrator import _read_pr_body
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    task = _make_task(tmp_worktree, task_id="ba1lly/repo#7").model_copy(
+        update={"issue_number": 7, "title": "Add multiply()"},
+    )
+
+    title, body = _read_pr_body(wt, task)
+
+    assert title == "closes #7: Add multiply()"
+    assert "Closes #7" in body
+    assert "Nocturne" in body
+
+
+def test_read_pr_body_falls_back_when_no_h1_heading(tmp_path: Path, tmp_worktree: Path) -> None:
+    """If opencode wrote the file but forgot the H1 line, fall back to the
+    legacy title and keep the file's content as the body so nothing is lost."""
+    from nocturne.orchestrator import _read_pr_body
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".nocturne-pr-body.md").write_text(
+        "Just some prose without an H1 heading.\n",
+        encoding="utf-8",
+    )
+    task = _make_task(tmp_worktree, task_id="ba1lly/repo#3").model_copy(
+        update={"issue_number": 3, "title": "Improve math"},
+    )
+
+    title, body = _read_pr_body(wt, task)
+
+    assert title == "closes #3: Improve math"
+    assert "Just some prose" in body
+
+
 def test_partition_eligible_respects_all_lifecycle_states(
     tmp_worktree: Path, inmem_store: Store,
 ) -> None:

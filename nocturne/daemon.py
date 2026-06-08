@@ -166,12 +166,6 @@ class Daemon:
                             await post_task_report(result_task, self.bot)
                         except Exception as e:
                             logger.warning("Discord task report failed (non-blocking): %s", e)
-                    if (
-                        self.cfg.review.enabled
-                        and result_task.status == "done"
-                        and result_task.pr_url
-                    ):
-                        self._schedule_review(result_task)
                 except Exception as e:
                     logger.error("process_task raised for resumed %s: %s", task.id, e)
                     cycle_summary["errors"].append(f"resumed:{task.id}:{e}")
@@ -211,12 +205,6 @@ class Daemon:
                                 await post_task_report(result_task, self.bot)
                             except Exception as e:
                                 logger.warning("Discord task report failed (non-blocking): %s", e)
-                        if (
-                            self.cfg.review.enabled
-                            and result_task.status == "done"
-                            and result_task.pr_url
-                        ):
-                            self._schedule_review(result_task)
                     except Exception as e:
                         logger.error("process_task raised for %s: %s", task.id, e)
                         cycle_summary["errors"].append(f"process:{task.id}:{e}")
@@ -259,7 +247,14 @@ class Daemon:
         return cycle_summary
 
     def _schedule_review(self, result_task: Any) -> None:
-        """Schedule a review_fix_loop as an async task for a completed task with a PR."""
+        """Schedule a review_fix_loop as an async task for a completed task with a PR.
+
+        DEPRECATED: As of Approach 1, the review-fix cycle runs INSIDE the
+        opencode subprocess that creates the PR (via @reviewer subagent calls
+        from the task prompt). This standalone scheduler is no longer called
+        from run_one_cycle and is retained only for backward compat with the
+        public _schedule_review API tests + manual triggering.
+        """
         if not self.cfg.review.enabled:
             return
         if not getattr(result_task, "pr_url", None):

@@ -58,6 +58,8 @@ def render_task_prompt(task: Task, cfg: Config, prior_failure: str | None = None
         verify_cmd=task.verify_cmd,
         require_new_test=task.require_new_test,
         branch=task.branch,
+        base=task.base,
+        budget_attempts=cfg.review.budget_attempts,
         prior_failure=prior_failure,
     )
 

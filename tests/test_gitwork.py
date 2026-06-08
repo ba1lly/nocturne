@@ -53,6 +53,55 @@ def test_prune_worktrees_invokes_git(monkeypatch: pytest.MonkeyPatch) -> None:
 # -----------------------------
 
 
+def test_make_worktree_adds_nocturne_artifacts_to_local_exclude(
+    tmp_worktree: Path, tmp_path: Path,
+) -> None:
+    """The nocturne-internal artifacts (.nocturne-pr-body.md + .reviews/)
+    MUST be in .git/info/exclude so commit_push's `git add -A` never
+    sweeps them into a real commit. This is the local-only ignore path."""
+    wt_path = tmp_path / "wt-excl"
+    make_worktree(tmp_worktree, "nocturne/issue-9-1", "main", wt_path)
+
+    git_path_result = subprocess.run(
+        ["git", "-C", str(wt_path), "rev-parse", "--git-path", "info/exclude"],
+        capture_output=True, text=True, check=True,
+    )
+    exclude_rel = git_path_result.stdout.strip()
+    exclude_path = Path(exclude_rel)
+    if not exclude_path.is_absolute():
+        exclude_path = (wt_path / exclude_rel).resolve()
+
+    assert exclude_path.is_file(), f".git/info/exclude not created at {exclude_path}"
+    content = exclude_path.read_text(encoding="utf-8")
+    assert ".nocturne-pr-body.md" in content
+    assert ".reviews/" in content
+
+
+def test_make_worktree_local_exclude_is_idempotent(tmp_worktree: Path, tmp_path: Path) -> None:
+    """Calling make_worktree twice (after cleanup) must not double-add
+    the exclude entries — preserves any user-added rules already there."""
+    wt_path = tmp_path / "wt-idem"
+    make_worktree(tmp_worktree, "nocturne/issue-10-1", "main", wt_path)
+
+    git_path_result = subprocess.run(
+        ["git", "-C", str(wt_path), "rev-parse", "--git-path", "info/exclude"],
+        capture_output=True, text=True, check=True,
+    )
+    exclude_path = Path(git_path_result.stdout.strip())
+    if not exclude_path.is_absolute():
+        exclude_path = (wt_path / exclude_path).resolve()
+
+    first = exclude_path.read_text(encoding="utf-8")
+    pr_body_count = first.count(".nocturne-pr-body.md")
+    reviews_count = first.count(".reviews/")
+
+    make_worktree(tmp_worktree, "nocturne/issue-10-1", "main", wt_path)
+    second = exclude_path.read_text(encoding="utf-8")
+
+    assert second.count(".nocturne-pr-body.md") == pr_body_count
+    assert second.count(".reviews/") == reviews_count
+
+
 def test_make_worktree_creates_worktree_and_installs_hook(tmp_worktree: Path, tmp_path: Path) -> None:
     wt_path = tmp_path / "wt-1"
     result = make_worktree(tmp_worktree, "nocturne/issue-1-1", "main", wt_path)
