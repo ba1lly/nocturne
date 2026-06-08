@@ -87,7 +87,10 @@ cat <<EOF
 Installed nocturne.service at $user_unit_path
 
 Next steps:
-  1. Edit ~/.config/nocturne/env to add DASHSCOPE_API_KEY and NOCTURNE_DISCORD_TOKEN
+  1. Populate ~/.config/nocturne/env with the API key env var named in your
+     config.yaml (e.g. DASHSCOPE_API_KEY for alibaba-coding-plan, ANTHROPIC_API_KEY
+     for anthropic, etc.) plus NOCTURNE_DISCORD_TOKEN if discord.enabled is true.
+     (bash scripts/setup.sh will write this file for you.)
   2. systemctl --user start nocturne
   3. journalctl --user -u nocturne -f
 

@@ -114,101 +114,132 @@ if ! $NON_INTERACTIVE; then
   echo "Note: API keys + Discord token live in your SHELL ENV, NOT this file."
   echo ""
 
-  # 1. GitHub owner
-  if [ -z "$OWNER" ]; then
-    read -rp "GitHub owner (your username or org): " OWNER
+  CONFIRMED=false
+  while ! $CONFIRMED; do
+    API_KEY_VALUE=""
+    DISCORD_TOKEN_VALUE=""
+
+    echo "[1/6] GitHub repository"
+    read -erp "  owner (your username or org) [${OWNER:-}]: " input
+    OWNER="${input:-$OWNER}"
     while [ -z "$OWNER" ]; do
-      read -rp "  → required. GitHub owner: " OWNER
+      read -erp "  → required. owner: " OWNER
     done
-  fi
+    read -erp "  sandbox repo name [$SANDBOX_REPO]: " input
+    SANDBOX_REPO="${input:-$SANDBOX_REPO}"
 
-  # 2. Sandbox repo
-  read -rp "Sandbox repo name [$SANDBOX_REPO]: " input
-  SANDBOX_REPO="${input:-$SANDBOX_REPO}"
-
-  # [3/6] Provider menu — accepts number OR name
-  echo ""
-  echo "[3/6] Choose your LLM provider:"
-  i=1
-  for p in "${PROVIDER_ORDER[@]}"; do
-    echo "  $i) $p  →  env: ${PROVIDER_ENV[$p]}, reasoning: ${PROVIDER_REASONING[$p]}, coding: ${PROVIDER_CODING[$p]}"
-    i=$((i+1))
-  done
-  while true; do
-    read -rp "Provider [1=$PROVIDER, or name]: " input
-    input="${input:-1}"
-    if [[ "$input" =~ ^[0-9]+$ ]]; then
-      idx=$((input-1))
-      if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PROVIDER_ORDER[@]}" ]; then
-        PROVIDER="${PROVIDER_ORDER[$idx]}"
+    echo ""
+    echo "[2/6] LLM provider"
+    i=1
+    for p in "${PROVIDER_ORDER[@]}"; do
+      echo "  $i) $p  →  env: ${PROVIDER_ENV[$p]}, reasoning: ${PROVIDER_REASONING[$p]}, coding: ${PROVIDER_CODING[$p]}"
+      i=$((i+1))
+    done
+    while true; do
+      read -erp "  pick [1=$PROVIDER, or name]: " input
+      input="${input:-1}"
+      if [[ "$input" =~ ^[0-9]+$ ]]; then
+        idx=$((input-1))
+        if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PROVIDER_ORDER[@]}" ]; then
+          PROVIDER="${PROVIDER_ORDER[$idx]}"
+          break
+        fi
+      elif [ -n "${PROVIDER_BASE_URL[$input]:-}" ]; then
+        PROVIDER="$input"
         break
       fi
-    elif [ -n "${PROVIDER_BASE_URL[$input]:-}" ]; then
-      PROVIDER="$input"
-      break
+      echo "  invalid: '$input'. valid: ${PROVIDER_ORDER[*]}"
+    done
+
+    API_KEY_ENV="${PROVIDER_ENV[$PROVIDER]}"
+
+    echo ""
+    echo "[3/6] Models for $PROVIDER (Enter to accept defaults)"
+    read -erp "  reasoning [${PROVIDER_REASONING[$PROVIDER]}]: " input
+    REASONING_MODEL="${input:-${PROVIDER_REASONING[$PROVIDER]}}"
+    read -erp "  coding    [${PROVIDER_CODING[$PROVIDER]}]: " input
+    CODING_MODEL="${input:-${PROVIDER_CODING[$PROVIDER]}}"
+    read -erp "  report    [$REASONING_MODEL]: " input
+    REPORT_MODEL="${input:-$REASONING_MODEL}"
+
+    # Best-effort opencode catalog check — warn-only, never blocks the flow.
+    if command -v opencode >/dev/null 2>&1; then
+      AVAILABLE=$(opencode models 2>/dev/null || true)
+      for MODEL in "$PROVIDER/$REASONING_MODEL" "$PROVIDER/$CODING_MODEL" "$PROVIDER/$REPORT_MODEL"; do
+        if [ -n "$AVAILABLE" ] && ! grep -Fxq "$MODEL" <<< "$AVAILABLE"; then
+          echo "  ⚠ '$MODEL' not found in 'opencode models' output — verify with: bash scripts/check_opencode_provider.sh"
+        fi
+      done
     fi
-    echo "  invalid: '$input'. valid: ${PROVIDER_ORDER[*]}"
-  done
 
-  # Resolve provider-derived defaults NOW (before secret prompts that label themselves with API_KEY_ENV)
-  API_KEY_ENV="${PROVIDER_ENV[$PROVIDER]}"
+    echo ""
+    echo "[4/6] Discord HITL (parked-task notifications + slash commands)"
+    echo "  Set channel ID + user ID to 0 to skip Discord entirely."
+    read -erp "  channel ID (0 to skip) [$DISCORD_CHANNEL]: " input
+    DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
+    read -erp "  mention user ID (0 to skip) [$DISCORD_USER]: " input
+    DISCORD_USER="${input:-$DISCORD_USER}"
 
-  # [4/6] Optional model overrides
-  echo ""
-  echo "[4/6] Models for $PROVIDER (Enter to accept defaults):"
-  read -rp "  reasoning [${PROVIDER_REASONING[$PROVIDER]}]: " input
-  REASONING_MODEL="${input:-${PROVIDER_REASONING[$PROVIDER]}}"
-  read -rp "  coding    [${PROVIDER_CODING[$PROVIDER]}]: " input
-  CODING_MODEL="${input:-${PROVIDER_CODING[$PROVIDER]}}"
-  read -rp "  report    [$REASONING_MODEL]: " input
-  REPORT_MODEL="${input:-$REASONING_MODEL}"
-
-  # [5/6] Discord HITL
-  echo ""
-  echo "[5/6] Discord HITL (parked-task notifications + slash commands):"
-  echo "  Set channel ID + user ID to 0 to skip Discord entirely."
-  read -rp "  channel ID (0 to skip) [$DISCORD_CHANNEL]: " input
-  DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
-  read -rp "  mention user ID (0 to skip) [$DISCORD_USER]: " input
-  DISCORD_USER="${input:-$DISCORD_USER}"
-
-  # [6/6] Token values — input hidden. Writes ~/.config/nocturne/env (mode 600) if provided.
-  echo ""
-  echo "[6/6] Secret tokens — input hidden; press Enter to skip and export in shell later."
-  echo "      Values stored in ~/.config/nocturne/env (mode 600) for systemd + shell sourcing."
-  echo ""
-
-  if [ -n "${!API_KEY_ENV:-}" ]; then
-    echo "  $API_KEY_ENV is already set in your current shell."
-    read -rp "  → reuse it in env file? [Y/n]: " input
-    if [[ ! "$input" =~ ^[Nn]$ ]]; then
-      API_KEY_VALUE="${!API_KEY_ENV}"
-    fi
-  else
-    read -srp "  $API_KEY_ENV (input hidden, Enter to skip): " API_KEY_VALUE; echo
-  fi
-
-  if [ "$DISCORD_CHANNEL" != "0" ] && [ "$DISCORD_USER" != "0" ]; then
-    if [ -n "${NOCTURNE_DISCORD_TOKEN:-}" ]; then
-      echo "  NOCTURNE_DISCORD_TOKEN is already set in your current shell."
-      read -rp "  → reuse it in env file? [Y/n]: " input
-      if [[ ! "$input" =~ ^[Nn]$ ]]; then
-        DISCORD_TOKEN_VALUE="$NOCTURNE_DISCORD_TOKEN"
-      fi
+    echo ""
+    echo "[5/6] Secret tokens — input hidden; press Enter to skip and export in shell later."
+    echo "      Values stored in ~/.config/nocturne/env (mode 600) for systemd + shell sourcing."
+    echo ""
+    if [ -n "${!API_KEY_ENV:-}" ]; then
+      echo "  $API_KEY_ENV already set in your current shell."
+      read -erp "  → reuse it in env file? [Y/n]: " input
+      [[ ! "$input" =~ ^[Nn]$ ]] && API_KEY_VALUE="${!API_KEY_ENV}"
     else
-      read -srp "  NOCTURNE_DISCORD_TOKEN (input hidden, Enter to skip): " DISCORD_TOKEN_VALUE; echo
+      read -srp "  $API_KEY_ENV (input hidden, Enter to skip): " API_KEY_VALUE; echo
     fi
-  fi
+    if [ "$DISCORD_CHANNEL" != "0" ] && [ "$DISCORD_USER" != "0" ]; then
+      if [ -n "${NOCTURNE_DISCORD_TOKEN:-}" ]; then
+        echo "  NOCTURNE_DISCORD_TOKEN already set in your current shell."
+        read -erp "  → reuse it in env file? [Y/n]: " input
+        [[ ! "$input" =~ ^[Nn]$ ]] && DISCORD_TOKEN_VALUE="$NOCTURNE_DISCORD_TOKEN"
+      else
+        read -srp "  NOCTURNE_DISCORD_TOKEN (input hidden, Enter to skip): " DISCORD_TOKEN_VALUE; echo
+      fi
+    fi
+    if [ -n "${API_KEY_VALUE:-}" ] || [ -n "${DISCORD_TOKEN_VALUE:-}" ]; then
+      WRITE_ENV_FILE=true
+    else
+      WRITE_ENV_FILE=false
+    fi
 
-  if [ -n "${API_KEY_VALUE:-}" ] || [ -n "${DISCORD_TOKEN_VALUE:-}" ]; then
-    WRITE_ENV_FILE=true
-  fi
+    echo ""
+    echo "[6/6] Reviewer skill"
+    INSTALL_REVIEWER=false
+    if [ -d "$HOME/.agents/skills/reviewer" ]; then
+      read -erp "  install from ~/.agents/skills/reviewer/? [y/N]: " input
+      [[ "$input" =~ ^[Yy]$ ]] && INSTALL_REVIEWER=true
+    else
+      echo "  (skipped — ~/.agents/skills/reviewer/ not found)"
+    fi
 
-  # Reviewer skill (M5 precondition)
-  if [ -d "$HOME/.agents/skills/reviewer" ]; then
-    read -rp "Install reviewer skill from ~/.agents/skills/reviewer/? [y/N]: " input
-    [[ "$input" =~ ^[Yy]$ ]] && INSTALL_REVIEWER=true
-  fi
+    echo ""
+    echo "─────────────────────────────────────────────────────────"
+    echo "  Review your choices"
+    echo "─────────────────────────────────────────────────────────"
+    echo "  GitHub owner:    $OWNER"
+    echo "  Sandbox repo:    $OWNER/$SANDBOX_REPO"
+    echo "  Provider:        $PROVIDER"
+    echo "  Reasoning model: $PROVIDER/$REASONING_MODEL"
+    echo "  Coding model:    $PROVIDER/$CODING_MODEL"
+    echo "  Report model:    $PROVIDER/$REPORT_MODEL"
+    echo "  Discord channel: $DISCORD_CHANNEL"
+    echo "  Discord user:    $DISCORD_USER"
+    echo "  API key value:   $([ -n "${API_KEY_VALUE:-}" ] && echo 'provided (will write env file)' || echo 'skipped (export $API_KEY_ENV in shell later)')"
+    echo "  Discord token:   $([ -n "${DISCORD_TOKEN_VALUE:-}" ] && echo 'provided (will write env file)' || echo 'skipped')"
+    echo "  Reviewer skill:  $($INSTALL_REVIEWER && echo 'will install' || echo 'skipped')"
+    echo ""
+    read -erp "Proceed and write config? [Y/n/edit]: " input
+    case "$input" in
+      ""|[Yy]*) CONFIRMED=true ;;
+      [Ee]*)    echo ""; echo "─── re-entering wizard ───"; echo "" ;;
+      [Nn]*)    echo "Aborted."; exit 1 ;;
+      *)        echo "Unrecognized — type Y to proceed, N to abort, edit to redo."; ;;
+    esac
+  done
 fi
 
 # -- Resolve API_KEY_ENV from provider if not explicitly set --
