@@ -1,0 +1,1 @@
+Checkpoint persistence via SqliteSaver is configured but full restart simulation is deferred to live M3 acceptance (Task 29). Unit tests verify graph compiles and post-interrupt nodes maintain idempotency under repeated invocation (see task-26-no-dup.log).

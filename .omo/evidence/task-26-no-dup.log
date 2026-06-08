@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.3, pluggy-1.6.0 -- /home/bailly/projects/nocturne/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /home/bailly/projects/nocturne
+configfile: pyproject.toml
+plugins: langsmith-0.8.9, anyio-4.13.0, asyncio-1.4.0, mock-3.15.1
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/test_askflow.py::TestPostParkCommentIdempotency::test_post_park_comment_skips_if_marker_present PASSED [ 50%]
+tests/test_askflow.py::TestPostParkCommentIdempotency::test_post_park_comment_called_twice_idempotent PASSED [100%]
+
+============================== 2 passed in 0.02s ===============================
