@@ -43,3 +43,11 @@ CREATE TABLE IF NOT EXISTS daemon_state (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS discord_messages (
+    msg_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_discord_messages_task_id ON discord_messages(task_id);

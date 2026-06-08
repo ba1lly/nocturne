@@ -161,5 +161,22 @@ class Store:
         row = db_row
         return cast(str, row[0])
 
+    def add_discord_message(self, msg_id: int, task_id: str) -> None:
+        """Persist a Discord message ID → task ID mapping for reply correlation."""
+        with self._conn:
+            _ = self._conn.execute(
+                "INSERT OR REPLACE INTO discord_messages (msg_id, task_id, created_at) VALUES (?, ?, ?)",
+                (msg_id, task_id, _now()),
+            )
+
+    def get_discord_message_task(self, msg_id: int) -> str | None:
+        """Look up the task ID associated with a Discord message ID. Returns None if not found."""
+        db_row = cast(sqlite3.Row | None, self._conn.execute(
+            "SELECT task_id FROM discord_messages WHERE msg_id = ?", (msg_id,)
+        ).fetchone())
+        if db_row is None:
+            return None
+        return cast(str, db_row[0])
+
     def close(self) -> None:
         self._conn.close()
