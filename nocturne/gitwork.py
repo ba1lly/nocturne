@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from nocturne.guardrails import enforce_no_force_push
@@ -160,26 +161,29 @@ def open_pr(repo: str, branch: str, base: str, title: str, body: str) -> str:
         "--body",
         body,
     ]
-    result = subprocess.run(
-        args,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    last_stderr = ""
+    for attempt in range(3):
+        result = subprocess.run(args, check=False, capture_output=True, text=True)
+        last_stderr = result.stderr or ""
 
-    if result.returncode == 0:
-        match = _PR_URL_RE.search(result.stdout or "")
+        if result.returncode == 0:
+            match = _PR_URL_RE.search(result.stdout or "")
+            if match:
+                return match.group(0)
+            raise GitworkError(f"gh succeeded but no PR URL in stdout: {result.stdout!r}")
+
+        combined = last_stderr + "\n" + (result.stdout or "")
+        match = _PR_URL_RE.search(combined)
         if match:
             return match.group(0)
-        raise GitworkError(f"gh succeeded but no PR URL in stdout: {result.stdout!r}")
 
-    # Non-zero exit: check stderr (and stdout) for an existing-PR URL (idempotency)
-    combined = (result.stderr or "") + "\n" + (result.stdout or "")
-    match = _PR_URL_RE.search(combined)
-    if match:
-        return match.group(0)
+        lower = last_stderr.lower()
+        if "rate limit" not in lower and "http 403" not in lower:
+            break
+        if attempt < 2:
+            time.sleep(1.0 * (2 ** attempt))
 
-    raise GitworkError(f"failed to open PR: {result.stderr}")
+    raise GitworkError(f"failed to open PR: {last_stderr}")
 
 
 def cleanup(wt: Path, repo_path: Path) -> None:

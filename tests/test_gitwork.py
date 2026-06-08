@@ -221,12 +221,25 @@ def test_open_pr_existing_pr_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_open_pr_hard_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = RecordingSubprocess()
-    recorder.queue_result(FakeGhResult.rate_limited())
+    for _ in range(3):
+        recorder.queue_result(FakeGhResult.rate_limited())
     monkeypatch.setattr(subprocess, "run", recorder)
+    monkeypatch.setattr("nocturne.gitwork.time.sleep", lambda *_: None)
 
     with pytest.raises(GitworkError) as exc:
         open_pr("octo/repo", "nocturne/issue-7-1", "main", "t", "b")
     assert "failed to open PR" in str(exc.value)
+    assert len(recorder.calls) == 3
+
+
+def test_open_pr_non_retryable_failure_does_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = RecordingSubprocess()
+    recorder.queue_result(FakeGhResult.auth_failed())
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    with pytest.raises(GitworkError):
+        open_pr("octo/repo", "nocturne/issue-7-1", "main", "t", "b")
+    assert len(recorder.calls) == 1
 
 
 # -----------------------------
