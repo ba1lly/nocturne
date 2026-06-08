@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from nocturne._logging import get_logger
 from nocturne.config import Config
+from nocturne.gitwork import commit_push
 from nocturne.skills import SKILLS_DIR, is_skill_enabled  # noqa: F401 (SKILLS_DIR re-export)
 
 logger = get_logger("nocturne.review")
@@ -240,6 +241,162 @@ def review_pr(
         attempts=1,
         skill_used=skill_name,
     )
+
+
+class ApplyFixesResult(BaseModel):
+    commits_added: int = 0
+    verify_passed: bool = False
+    fix_attempts: int = 0
+
+
+def _render_fix_prompt(findings: list[ReviewFinding], pr_url: str) -> str:
+    """Build a prompt instructing OpenCode to fix the listed findings."""
+    body_lines = [
+        f"You are addressing reviewer findings on PR {pr_url}.",
+        "",
+        "Apply minimal targeted fixes for each of the following findings.",
+        "DO NOT refactor unrelated code. DO NOT add new features.",
+        "",
+        "Findings:",
+        "",
+    ]
+    for i, f in enumerate(findings, 1):
+        line_str = str(f.line) if f.line is not None else "?"
+        body_lines.append(
+            f"{i}. [{f.severity}] {f.file}:{line_str} ({f.category}): {f.message}"
+        )
+        if f.suggested_fix:
+            body_lines.append(f"   Suggested fix: {f.suggested_fix}")
+    body_lines.append("")
+    body_lines.append("After applying fixes, the verification command will be run.")
+    body_lines.append("Add new tests if needed to cover the fixes.")
+    return "\n".join(body_lines)
+
+
+def apply_fixes(
+    pr_url: str,
+    findings: list[ReviewFinding],
+    worktree: Path,
+    cfg: Config,
+    attempt: int = 1,
+) -> ApplyFixesResult:
+    """Invoke OpenCode to apply fixes for the findings; commit + push (append-only).
+
+    Uses cfg.models.coding (actual code changes, not reasoning).
+    Calls gitwork.commit_push which enforces no force-push.
+    """
+    if not findings:
+        return ApplyFixesResult(commits_added=0, verify_passed=True, fix_attempts=attempt)
+
+    prompt = _render_fix_prompt(findings, pr_url)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", dir=str(worktree), delete=False,
+    ) as f:
+        f.write(prompt)
+        prompt_path = f.name
+
+    try:
+        result = subprocess.run(
+            [
+                cfg.opencode.command, "run",
+                "--model", cfg.models.coding,
+                "--dir", str(worktree),
+                "--format", "json",
+                "-f", prompt_path,
+            ],
+            capture_output=True, text=True,
+            timeout=cfg.opencode.timeout_min * 60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("apply_fixes opencode timed out for %s", pr_url)
+        return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
+    finally:
+        try:
+            Path(prompt_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if result.returncode != 0:
+        logger.warning(
+            "apply_fixes opencode failed (exit %s): %s",
+            result.returncode, (result.stderr or "")[:500],
+        )
+        return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
+
+    status_result = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--porcelain"],
+        capture_output=True, text=True, check=False,
+    )
+    if not status_result.stdout.strip():
+        logger.info("apply_fixes for %s: no changes after opencode run", pr_url)
+        return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
+
+    commit_msg = (
+        f"fix(review): address {len(findings)} reviewer findings [round {attempt}]"
+    )
+    try:
+        commit_push(worktree, commit_msg)
+    except Exception as e:
+        logger.warning("commit_push raised in apply_fixes: %s", e)
+        return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
+
+    return ApplyFixesResult(commits_added=1, verify_passed=True, fix_attempts=attempt)
+
+
+def review_fix_loop(
+    pr_url: str,
+    worktree: Path,
+    cfg: Config,
+    store,
+    task_id: Optional[str] = None,
+    base: str = "main",
+) -> ReviewResult:
+    """Run the full review→fix loop until clean OR budget exhausted.
+
+    Records each attempt in store.review_runs table.
+    Returns the final ReviewResult.
+    """
+    budget = cfg.review.budget_attempts
+    run_id = store.start_review_run(task_id, pr_url)
+    final_result = ReviewResult(
+        clean=False, findings=[], raw_output="",
+        attempts=0, skill_used=cfg.review.skill_name,
+    )
+
+    try:
+        for attempt in range(1, budget + 1):
+            try:
+                result = review_pr(pr_url, worktree, cfg, base=base)
+            except SkillNotInstalled:
+                raise
+            except Exception as e:
+                logger.warning("review_pr raised on attempt %s: %s", attempt, e)
+                break
+            final_result = result
+            final_result.attempts = attempt
+            if result.clean:
+                logger.info(
+                    "review clean for %s after %s attempt(s)", pr_url, attempt,
+                )
+                break
+            logger.info(
+                "review attempt %s: %s — applying fixes",
+                attempt, findings_summary(result.findings),
+            )
+            fix_result = apply_fixes(
+                pr_url, result.findings, worktree, cfg, attempt=attempt,
+            )
+            if fix_result.commits_added == 0:
+                logger.warning(
+                    "no fixes applied at attempt %s; aborting fix loop", attempt,
+                )
+                break
+    finally:
+        store.end_review_run(run_id, final_result.attempts, final_result.clean)
+
+    return final_result
 
 
 def findings_summary(findings: list[ReviewFinding]) -> str:

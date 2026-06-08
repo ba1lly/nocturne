@@ -312,3 +312,380 @@ def test_malformed_fallback(
 )
 def test_real_review_smoke() -> None:  # pragma: no cover - deferred
     pass
+
+
+# ---------- apply_fixes + review_fix_loop tests (Task 39) ----------
+
+
+from nocturne.review import (  # noqa: E402
+    ApplyFixesResult,
+    apply_fixes,
+    review_fix_loop,
+)
+
+
+def _patch_apply_fixes_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    opencode_returncode: int = 0,
+    opencode_raises=None,
+    git_status_stdout: str = " M file.py\n",
+) -> list[tuple]:
+    """Patch review_mod.subprocess.run for apply_fixes tests.
+
+    Distinguishes git status calls (return given stdout) from opencode calls
+    (return given returncode or raise).
+    """
+    calls: list[tuple] = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        if (
+            isinstance(args, (list, tuple))
+            and len(args) >= 4
+            and args[0] == "git"
+            and "status" in args
+        ):
+            return _fake_completed(stdout=git_status_stdout)
+        if opencode_raises is not None:
+            raise opencode_raises
+        return _fake_completed(returncode=opencode_returncode, stdout="ok", stderr="")
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def _record_commit_push(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Replace commit_push with a recording fake."""
+    recorded: list[tuple] = []
+
+    def fake_commit_push(wt, message):
+        recorded.append((wt, message))
+
+    monkeypatch.setattr(review_mod, "commit_push", fake_commit_push)
+    return recorded
+
+
+def _finding(severity: str = "high", file: str = "x.py") -> ReviewFinding:
+    return ReviewFinding(
+        severity=severity, file=file, line=10, category="bug", message="fix it",
+    )
+
+
+def test_apply_fixes_with_findings_calls_opencode_and_commits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    calls = _patch_apply_fixes_subprocess(monkeypatch)
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    result = apply_fixes(
+        "https://github.com/x/y/pull/1",
+        [_finding(), _finding(severity="medium", file="y.py")],
+        tmp_path,
+        cfg,
+        attempt=1,
+    )
+
+    assert isinstance(result, ApplyFixesResult)
+    assert result.commits_added == 1
+    assert result.verify_passed is True
+    assert result.fix_attempts == 1
+    assert len(recorded) == 1
+    wt_arg, msg_arg = recorded[0]
+    assert wt_arg == tmp_path
+    assert msg_arg == "fix(review): address 2 reviewer findings [round 1]"
+    # opencode must have been invoked with the coding model
+    opencode_calls = [
+        c for c in calls
+        if isinstance(c[0], (list, tuple)) and len(c[0]) > 0 and c[0][0] != "git"
+    ]
+    assert len(opencode_calls) == 1
+    args, _ = opencode_calls[0]
+    assert "--model" in args
+    assert args[args.index("--model") + 1] == cfg.models.coding
+
+
+def test_apply_fixes_no_changes_returns_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _patch_apply_fixes_subprocess(monkeypatch, git_status_stdout="")
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    result = apply_fixes(
+        "https://github.com/x/y/pull/1", [_finding()], tmp_path, cfg, attempt=1,
+    )
+
+    assert result.commits_added == 0
+    assert result.verify_passed is False
+    assert recorded == []
+
+
+def test_apply_fixes_opencode_failure_returns_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _patch_apply_fixes_subprocess(monkeypatch, opencode_returncode=1)
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    result = apply_fixes(
+        "https://github.com/x/y/pull/1", [_finding()], tmp_path, cfg, attempt=1,
+    )
+
+    assert result.commits_added == 0
+    assert result.verify_passed is False
+    assert recorded == []
+
+
+def test_apply_fixes_timeout_returns_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _patch_apply_fixes_subprocess(
+        monkeypatch,
+        opencode_raises=subprocess.TimeoutExpired(cmd=["opencode"], timeout=1),
+    )
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    result = apply_fixes(
+        "https://github.com/x/y/pull/1", [_finding()], tmp_path, cfg, attempt=1,
+    )
+
+    assert result.commits_added == 0
+    assert result.verify_passed is False
+    assert recorded == []
+
+
+def test_fix_appends_no_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """apply_fixes must call commit_push with (worktree, message) — no --force anywhere."""
+    _patch_apply_fixes_subprocess(monkeypatch)
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    _ = apply_fixes(
+        "https://github.com/x/y/pull/1", [_finding()], tmp_path, cfg, attempt=2,
+    )
+
+    assert len(recorded) == 1
+    wt_arg, msg_arg = recorded[0]
+    assert wt_arg == tmp_path
+    assert msg_arg == "fix(review): address 1 reviewer findings [round 2]"
+    # Defensive: scan all positional args for accidental --force
+    for arg in recorded[0]:
+        if isinstance(arg, str):
+            assert "--force" not in arg
+        elif isinstance(arg, (list, tuple)):
+            assert "--force" not in arg
+
+
+def test_apply_fixes_empty_findings_short_circuits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Empty findings list → no subprocess, no commit, verify_passed=True."""
+    calls = _patch_apply_fixes_subprocess(monkeypatch)
+    recorded = _record_commit_push(monkeypatch)
+    cfg = _cfg()
+
+    result = apply_fixes(
+        "https://github.com/x/y/pull/1", [], tmp_path, cfg, attempt=1,
+    )
+
+    assert result.commits_added == 0
+    assert result.verify_passed is True
+    assert calls == []
+    assert recorded == []
+
+
+def test_review_fix_loop_clean_on_first_pass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inmem_store,
+) -> None:
+    cfg = _cfg()
+    clean_result = ReviewResult(
+        clean=True, findings=[], raw_output="", attempts=1, skill_used=cfg.review.skill_name,
+    )
+    review_calls: list[int] = []
+
+    def fake_review_pr(pr_url, worktree, cfg, base="main"):
+        review_calls.append(1)
+        return clean_result
+
+    apply_calls: list[int] = []
+
+    def fake_apply_fixes(*args, **kwargs):
+        apply_calls.append(1)
+        return ApplyFixesResult(commits_added=1, verify_passed=True, fix_attempts=1)
+
+    monkeypatch.setattr(review_mod, "review_pr", fake_review_pr)
+    monkeypatch.setattr(review_mod, "apply_fixes", fake_apply_fixes)
+
+    final = review_fix_loop(
+        "https://github.com/x/y/pull/1", tmp_path, cfg, inmem_store,
+        task_id="ba1lly/sandbox#1",
+    )
+
+    assert final.clean is True
+    assert final.attempts == 1
+    assert len(review_calls) == 1
+    assert apply_calls == []
+    rows = inmem_store.list_review_runs_for_pr("https://github.com/x/y/pull/1")
+    assert len(rows) == 1
+    assert rows[0]["clean"] is True
+    assert rows[0]["attempts"] == 1
+    assert rows[0]["ended_at"] is not None
+    assert rows[0]["task_id"] == "ba1lly/sandbox#1"
+
+
+def test_review_fix_loop_fixes_then_clean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inmem_store,
+) -> None:
+    cfg = _cfg()
+    cfg.review.budget_attempts = 3
+    findings = [_finding()]
+    dirty = ReviewResult(
+        clean=False, findings=findings, raw_output="", attempts=1, skill_used=cfg.review.skill_name,
+    )
+    clean = ReviewResult(
+        clean=True, findings=[], raw_output="", attempts=1, skill_used=cfg.review.skill_name,
+    )
+    queue = [dirty, clean]
+    review_calls: list[int] = []
+
+    def fake_review_pr(pr_url, worktree, cfg, base="main"):
+        review_calls.append(1)
+        return queue.pop(0)
+
+    apply_calls: list[int] = []
+
+    def fake_apply_fixes(*args, **kwargs):
+        apply_calls.append(1)
+        return ApplyFixesResult(commits_added=1, verify_passed=True, fix_attempts=1)
+
+    monkeypatch.setattr(review_mod, "review_pr", fake_review_pr)
+    monkeypatch.setattr(review_mod, "apply_fixes", fake_apply_fixes)
+
+    final = review_fix_loop(
+        "https://github.com/x/y/pull/1", tmp_path, cfg, inmem_store,
+        task_id="ba1lly/sandbox#2",
+    )
+
+    assert final.clean is True
+    assert final.attempts == 2
+    assert len(review_calls) == 2
+    assert len(apply_calls) == 1
+    rows = inmem_store.list_review_runs_for_pr("https://github.com/x/y/pull/1")
+    assert len(rows) == 1
+    assert rows[0]["clean"] is True
+    assert rows[0]["attempts"] == 2
+
+
+def test_budget_exhaustion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inmem_store,
+) -> None:
+    cfg = _cfg()
+    cfg.review.budget_attempts = 2
+    findings = [_finding()]
+    dirty = ReviewResult(
+        clean=False, findings=findings, raw_output="", attempts=1, skill_used=cfg.review.skill_name,
+    )
+    review_calls: list[int] = []
+
+    def fake_review_pr(pr_url, worktree, cfg, base="main"):
+        review_calls.append(1)
+        return dirty
+
+    apply_calls: list[int] = []
+
+    def fake_apply_fixes(*args, **kwargs):
+        apply_calls.append(1)
+        return ApplyFixesResult(commits_added=1, verify_passed=True, fix_attempts=1)
+
+    monkeypatch.setattr(review_mod, "review_pr", fake_review_pr)
+    monkeypatch.setattr(review_mod, "apply_fixes", fake_apply_fixes)
+
+    final = review_fix_loop(
+        "https://github.com/x/y/pull/2", tmp_path, cfg, inmem_store,
+        task_id="ba1lly/sandbox#3",
+    )
+
+    assert final.clean is False
+    assert final.attempts == 2
+    assert len(review_calls) == 2
+    assert len(apply_calls) == 2
+    rows = inmem_store.list_review_runs_for_pr("https://github.com/x/y/pull/2")
+    assert len(rows) == 1
+    assert rows[0]["clean"] is False
+    assert rows[0]["attempts"] == 2
+
+
+def test_review_fix_loop_aborts_when_no_fix_applied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inmem_store,
+) -> None:
+    """If apply_fixes returns commits_added=0, the loop must abort early."""
+    cfg = _cfg()
+    cfg.review.budget_attempts = 5
+    findings = [_finding()]
+    dirty = ReviewResult(
+        clean=False, findings=findings, raw_output="", attempts=1, skill_used=cfg.review.skill_name,
+    )
+    review_calls: list[int] = []
+
+    def fake_review_pr(pr_url, worktree, cfg, base="main"):
+        review_calls.append(1)
+        return dirty
+
+    apply_calls: list[int] = []
+
+    def fake_apply_fixes(*args, **kwargs):
+        apply_calls.append(1)
+        return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=1)
+
+    monkeypatch.setattr(review_mod, "review_pr", fake_review_pr)
+    monkeypatch.setattr(review_mod, "apply_fixes", fake_apply_fixes)
+
+    final = review_fix_loop(
+        "https://github.com/x/y/pull/3", tmp_path, cfg, inmem_store,
+    )
+
+    assert final.clean is False
+    # Loop aborts after first failed apply_fixes — only 1 review + 1 apply
+    assert len(review_calls) == 1
+    assert len(apply_calls) == 1
+
+
+# ---------- Store review_runs tests (Task 39) ----------
+
+
+def test_start_review_run_and_get(inmem_store) -> None:
+    run_id = inmem_store.start_review_run("task-1", "https://github.com/x/y/pull/1")
+    assert run_id > 0
+    row = inmem_store.get_review_run(run_id)
+    assert row is not None
+    assert row["task_id"] == "task-1"
+    assert row["pr_url"] == "https://github.com/x/y/pull/1"
+    assert row["attempts"] == 0
+    assert row["clean"] is False
+    assert row["started_at"] is not None
+    assert row["ended_at"] is None
+
+
+def test_end_review_run_marks_clean(inmem_store) -> None:
+    run_id = inmem_store.start_review_run("task-2", "https://github.com/x/y/pull/2")
+    inmem_store.end_review_run(run_id, attempts=3, clean=True)
+    row = inmem_store.get_review_run(run_id)
+    assert row is not None
+    assert row["attempts"] == 3
+    assert row["clean"] is True
+    assert row["ended_at"] is not None
+
+
+def test_list_review_runs_for_pr_orders_most_recent_first(inmem_store) -> None:
+    import time
+    pr_url = "https://github.com/x/y/pull/9"
+    first = inmem_store.start_review_run("t-a", pr_url)
+    time.sleep(0.005)
+    second = inmem_store.start_review_run("t-b", pr_url)
+    rows = inmem_store.list_review_runs_for_pr(pr_url)
+    assert [r["id"] for r in rows] == [second, first]

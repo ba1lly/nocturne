@@ -51,3 +51,15 @@ CREATE TABLE IF NOT EXISTS discord_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_discord_messages_task_id ON discord_messages(task_id);
+
+CREATE TABLE IF NOT EXISTS review_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT,
+    pr_url TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    clean INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    ended_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_runs_pr_url ON review_runs(pr_url);

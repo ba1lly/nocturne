@@ -178,5 +178,64 @@ class Store:
             return None
         return cast(str, db_row[0])
 
+    def start_review_run(self, task_id: str | None, pr_url: str) -> int:
+        """Insert a new review_runs row; return the rowid."""
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO review_runs (task_id, pr_url, attempts, clean, started_at) "
+                "VALUES (?, ?, 0, 0, ?)",
+                (task_id, pr_url, _now()),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("review_runs insert did not return a rowid")
+            return int(cursor.lastrowid)
+
+    def end_review_run(self, run_id: int, attempts: int, clean: bool) -> None:
+        """Mark a review_runs row as ended."""
+        with self._conn:
+            _ = self._conn.execute(
+                "UPDATE review_runs SET attempts = ?, clean = ?, ended_at = ? WHERE id = ?",
+                (attempts, 1 if clean else 0, _now(), run_id),
+            )
+
+    def get_review_run(self, run_id: int) -> dict | None:
+        """Return the row as a dict, or None if not found."""
+        db_row = cast(sqlite3.Row | None, self._conn.execute(
+            "SELECT id, task_id, pr_url, attempts, clean, started_at, ended_at "
+            "FROM review_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone())
+        if db_row is None:
+            return None
+        return {
+            "id": db_row[0],
+            "task_id": db_row[1],
+            "pr_url": db_row[2],
+            "attempts": db_row[3],
+            "clean": bool(db_row[4]),
+            "started_at": db_row[5],
+            "ended_at": db_row[6],
+        }
+
+    def list_review_runs_for_pr(self, pr_url: str) -> list[dict]:
+        """All review_runs rows for a given pr_url (most recent first)."""
+        db_rows = cast(list[sqlite3.Row], self._conn.execute(
+            "SELECT id, task_id, pr_url, attempts, clean, started_at, ended_at "
+            "FROM review_runs WHERE pr_url = ? ORDER BY started_at DESC",
+            (pr_url,),
+        ).fetchall())
+        return [
+            {
+                "id": r[0],
+                "task_id": r[1],
+                "pr_url": r[2],
+                "attempts": r[3],
+                "clean": bool(r[4]),
+                "started_at": r[5],
+                "ended_at": r[6],
+            }
+            for r in db_rows
+        ]
+
     def close(self) -> None:
         self._conn.close()
