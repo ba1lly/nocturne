@@ -95,12 +95,26 @@ def make_worktree(
             pass
         shutil.rmtree(worktree_path, ignore_errors=True)
 
+    # Force-delete any pre-existing local branch with this name (leftover from a prior
+    # failed attempt). check=False because the branch usually does NOT exist; we only
+    # care that `worktree add -b` below sees a clean slate.
     subprocess.run(
-        ["git", "-C", str(repo_path), "worktree", "add", str(worktree_path), "-b", branch, base],
-        check=True,
+        ["git", "-C", str(repo_path), "branch", "-D", branch],
+        check=False,
         capture_output=True,
         text=True,
     )
+
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "worktree", "add", str(worktree_path), "-b", branch, base],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise GitworkError(
+            f"git worktree add failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
 
     _install_pre_push_hook(worktree_path)
 

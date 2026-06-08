@@ -95,6 +95,7 @@ def _build_opencode_args(task: Task, cwd: Path, prompt_path: Path, cfg: Config) 
         str(cwd),
         "--format",
         "json",
+        "--",
         prompt_content,
     ]
 
