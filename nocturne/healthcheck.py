@@ -46,14 +46,28 @@ class Healthcheck:
         return float(self.cfg.healthcheck.staleness_factor) * float(self.cfg.daemon.poll_interval_sec)
 
     def _is_stale(self) -> tuple[bool, float]:
-        """Return (is_stale, age_seconds). age=infinity if _last_poll_at is None."""
+        """Return (is_stale, age_seconds).
+
+        Startup grace: when the daemon hasn't completed its first poll yet
+        (last_poll_at is None), the healthcheck reports healthy as long as
+        the daemon has been alive for less than the staleness threshold.
+        Once that threshold elapses without a poll completing, OR once a
+        poll completes and then ages past the threshold, it reports stale.
+
+        Rationale: with longer poll cycles (e.g. Approach 1's ~20-min
+        per-task work), the daemon legitimately takes minutes to finish
+        cycle 1. Treating 'haven't polled yet' as immediately stale makes
+        systemd / k8s probes flap on every restart.
+        """
         if self.daemon is None:
             return (False, 0.0)
         lpa = self.daemon.last_poll_at
+        threshold = self._staleness_threshold_s()
         if lpa is None:
-            return (True, float("inf"))
+            uptime_s = time.time() - self._started_at
+            return (uptime_s > threshold, uptime_s)
         age = (datetime.now(timezone.utc) - lpa).total_seconds()
-        return (age > self._staleness_threshold_s(), age)
+        return (age > threshold, age)
 
     async def _sqlite_ok(self) -> bool:
         try:

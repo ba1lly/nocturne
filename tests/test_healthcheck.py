@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -117,16 +118,41 @@ async def test_stale_503(inmem_store, fake_cfg):
 
 
 @pytest.mark.asyncio
-async def test_no_last_poll_503(inmem_store, fake_cfg):
-    """Health endpoint returns 503 when last_poll_at is None."""
+async def test_no_last_poll_503_after_grace_period_elapses(inmem_store, fake_cfg):
+    """If the daemon never completes its first poll AND the staleness
+    threshold elapses, healthcheck must report stale. This is the original
+    stuck-daemon detection path; the grace period only protects normal
+    startup, not a permanently-broken poll loop."""
     daemon = _fake_daemon(last_poll_age_s=None)
     hc = Healthcheck(fake_cfg, inmem_store, daemon=daemon)
+    hc._started_at = time.time() - (hc._staleness_threshold_s() + 60)
+
     resp = await hc.health_handler(_fake_request())
+
     assert resp.status == 503
     body = resp.body.decode("utf-8")
     data = json.loads(body)
     assert data["status"] == "stale"
-    assert data["last_poll_age_s"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_last_poll_200_during_startup_grace(inmem_store, fake_cfg):
+    """When the daemon just started and hasn't completed its first poll yet
+    (last_poll_at=None) but uptime is within the staleness threshold, the
+    healthcheck must report HEALTHY. Without this, M5 Test 4's 30s sleep
+    after systemctl start hits a 503 because Approach 1's first poll cycle
+    takes minutes."""
+    daemon = _fake_daemon(last_poll_age_s=None)
+    hc = Healthcheck(fake_cfg, inmem_store, daemon=daemon)
+
+    resp = await hc.health_handler(_fake_request())
+
+    assert resp.status == 200
+    body = resp.body.decode("utf-8")
+    data = json.loads(body)
+    assert data["status"] == "healthy"
+    assert data["last_poll_age_s"] is not None
+    assert data["last_poll_age_s"] < hc._staleness_threshold_s()
 
 
 @pytest.mark.asyncio
