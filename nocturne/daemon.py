@@ -246,6 +246,16 @@ class Daemon:
         """Main entry: install signal handlers, gather poll_loop + bot."""
         await self._install_signal_handlers()
 
+        healthcheck = None
+        if self.cfg.healthcheck.enabled:
+            try:
+                from nocturne.healthcheck import Healthcheck
+                healthcheck = Healthcheck(self.cfg, self.store, daemon=self)
+                await healthcheck.start()
+            except Exception as e:
+                logger.warning("could not start healthcheck (continuing without): %s", e)
+                healthcheck = None
+
         tasks = [asyncio.create_task(self._poll_loop(), name="poll_loop")]
         if self.bot is not None:
             tasks.append(asyncio.create_task(self.bot.start(), name="discord_bot"))
@@ -269,6 +279,11 @@ class Daemon:
             # Drain cancelled tasks.
             await asyncio.gather(*pending, return_exceptions=True)
         finally:
+            if healthcheck is not None:
+                try:
+                    await healthcheck.stop()
+                except Exception as e:
+                    logger.warning("healthcheck.stop raised: %s", e)
             if self.bot is not None:
                 try:
                     await self.bot.close()
