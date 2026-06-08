@@ -364,6 +364,15 @@ def test_no_cleanup_on_failure(monkeypatch: pytest.MonkeyPatch, task: Task, cfg:
     assert len(calls.cleanup) == 0
 
 
+def test_no_cleanup_on_dry_run_success(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    calls = _patch_all(monkeypatch)
+
+    orchestrator.process_task(task, cfg, inmem_store, dry_run=True)
+
+    assert len(calls.cleanup) == 0, "dry-run must keep worktree so the operator can audit the would-be diff"
+    assert len(calls.commit_push) == 0
+
+
 def test_format_error_shape() -> None:
     result = FakeOpenCodeResult.with_error_event("boom-text")
 

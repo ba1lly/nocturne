@@ -169,9 +169,8 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
             store.update_status(task.id, "failed")
             task.status = "failed"
     finally:
-        if success:
+        if success and not dry_run:
             gitwork.cleanup(wt, Path(task.checkout_path))
-        # else: retain worktree for debugging (default behavior).
 
     return task
 
