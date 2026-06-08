@@ -1,0 +1,20 @@
+{% if soul %}---
+# Persona
+{{ soul }}
+---
+
+{% endif %}You are working on GitHub issue #{{ issue_number }}: {{ issue_title }}
+
+{{ issue_body }}
+
+Your changes will be verified with `{{ verify_cmd }}` — exit 0 means success. {% if require_new_test %}You MUST add at least one test file or modify an existing test as part of your change.{% endif %}
+
+If the issue is ambiguous or you need clarification, emit exactly this line on its own line then stop: `##NOCTURNE_NEED_INPUT##`. On the next line, write your question to the human. Do NOT emit that sentinel anywhere else in your output.
+
+{% if prior_failure %}Your previous attempt failed verification. The output was:
+```
+{{ prior_failure }}
+```
+Fix the underlying issue.{% endif %}
+
+Never run `git push --force`, `gh pr merge`, or any command modifying `main`. Stay on branch `{{ branch }}`.
