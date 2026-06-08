@@ -85,6 +85,7 @@ def has_error_events(events: list[dict[str, object]]) -> list[dict[str, object]]
 
 def _build_opencode_args(task: Task, cwd: Path, prompt_path: Path, cfg: Config) -> list[str]:
     model_string = task.coding_model if task.coding_model else cfg.models.coding
+    prompt_content = prompt_path.read_text(encoding="utf-8")
     return [
         cfg.opencode.command,
         "run",
@@ -94,8 +95,7 @@ def _build_opencode_args(task: Task, cwd: Path, prompt_path: Path, cfg: Config) 
         str(cwd),
         "--format",
         "json",
-        "-f",
-        str(prompt_path),
+        prompt_content,
     ]
 
 

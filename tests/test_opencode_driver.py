@@ -182,15 +182,20 @@ def test_has_error_events_returns_empty_list_when_absent() -> None:
 
 
 def test_build_opencode_args_uses_config_model_when_task_model_empty(task: Task, cfg: Config, tmp_path: Path) -> None:
-    args = _build_opencode_args(task, tmp_path, tmp_path / "prompt.md", cfg)
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("test prompt content", encoding="utf-8")
+    args = _build_opencode_args(task, tmp_path, prompt_path, cfg)
 
     assert args[args.index("--model") + 1] == cfg.models.coding
+    assert args[-1] == "test prompt content"
+    assert "-f" not in args
 
 
 def test_build_opencode_args_uses_task_model_when_set(task: Task, cfg: Config, tmp_path: Path) -> None:
     task.coding_model = "alibaba-coding-plan/custom-coder"
-
-    args = _build_opencode_args(task, tmp_path, tmp_path / "prompt.md", cfg)
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("test", encoding="utf-8")
+    args = _build_opencode_args(task, tmp_path, prompt_path, cfg)
 
     assert args[args.index("--model") + 1] == "alibaba-coding-plan/custom-coder"
 
