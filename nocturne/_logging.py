@@ -115,6 +115,5 @@ class timed:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         tb: object | None,
-    ) -> bool:
+    ) -> None:
         self.elapsed_ms = (time.perf_counter() - self._t0) * 1000
-        return False

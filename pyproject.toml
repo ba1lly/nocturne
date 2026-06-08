@@ -39,3 +39,43 @@ asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["nocturne"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "build", "dist", ".omo", "scripts/systemd"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = [
+  "E501",
+  "B008",
+  "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811", "F541", "F841"]
+"nocturne/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["nocturne"]
+ignore_missing_imports = true
+disable_error_code = [
+  "import-untyped",
+  "no-untyped-def",
+  "no-untyped-call",
+  "var-annotated",
+  "attr-defined",
+  "arg-type",
+  "assignment",
+  "return-value",
+  "misc",
+]
+warn_unused_ignores = false
+warn_redundant_casts = true
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true

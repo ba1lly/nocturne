@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("NOCTURNE_RUN_M4") != "1",
     reason="Set NOCTURNE_RUN_M4=1 to run live M4 acceptance",
@@ -72,7 +71,7 @@ def preflight_checks():
 
 def test_m4_discord_parked_e2e(state_dir):
     """Test 3: Daemon parks Issue #3, harness fetches message, replies, task resumes to done.
-    
+
     Implementation outline — actual execution requires DISCORD_TOKEN + sandbox state.
     """
     pytest.skip("Implementation deferred — requires live env per plan Task 36 pattern")
@@ -80,7 +79,7 @@ def test_m4_discord_parked_e2e(state_dir):
 
 def test_m4_issue_closed_mid_task_abort(state_dir):
     """Test 4: Create a sleep-test issue, close it mid-execution, assert aborted status.
-    
+
     Implementation outline — actual execution requires live env.
     """
     pytest.skip("Implementation deferred — requires live env")
@@ -88,7 +87,7 @@ def test_m4_issue_closed_mid_task_abort(state_dir):
 
 def test_m4_discord_commands_via_harness(state_dir):
     """Test 5: Drive each slash command via harness; verify behavior.
-    
+
     Implementation outline — actual execution requires live env + bot tree access.
     """
     pytest.skip("Implementation deferred — requires live env")

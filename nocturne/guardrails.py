@@ -80,7 +80,6 @@ class WorktreeContext:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool:
+    ) -> None:
         if exc_type is None:
             assert_not_main_branch(self.worktree_path, self.expected_base)
-        return False

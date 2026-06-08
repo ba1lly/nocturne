@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Optional
 
 import jinja2
 
-from nocturne.models import RunReport
-from nocturne.config import Config, get_api_key, provider_of
 from nocturne._logging import get_logger
+from nocturne.config import Config, get_api_key, provider_of
+from nocturne.models import RunReport
 
 if TYPE_CHECKING:
     from nocturne.models import Task
@@ -21,16 +21,16 @@ def _human_duration(start: datetime, end: Optional[datetime]) -> str:
     """Convert timedelta to human-readable format like '5m 30s'."""
     if end is None:
         return "in progress"
-    
+
     delta = end - start
     total_seconds = int(delta.total_seconds())
-    
+
     if total_seconds < 0:
         return "invalid"
-    
+
     minutes = total_seconds // 60
     seconds = total_seconds % 60
-    
+
     if minutes == 0:
         return f"{seconds}s"
     elif seconds == 0:
@@ -41,15 +41,15 @@ def _human_duration(start: datetime, end: Optional[datetime]) -> str:
 
 def write_report(report: RunReport, reports_dir: Path) -> Path:
     """Write a RunReport to a Markdown file in reports_dir.
-    
+
     Returns the path to the written file.
     """
     reports_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Filesystem-safe ISO timestamp: replace colons with dashes
     filename = report.started_at.strftime("%Y-%m-%dT%H-%M-%S") + ".md"
     report_path = reports_dir / filename
-    
+
     # Load and render template
     template_dir = Path(__file__).parent / "templates"
     env = jinja2.Environment(
@@ -58,7 +58,7 @@ def write_report(report: RunReport, reports_dir: Path) -> Path:
         keep_trailing_newline=True,
     )
     template = env.get_template("report.md.jinja2")
-    
+
     context = {
         "started_at": report.started_at.isoformat(),
         "ended_at": report.ended_at.isoformat(),
@@ -70,10 +70,10 @@ def write_report(report: RunReport, reports_dir: Path) -> Path:
         "errors": report.errors,
         "token_usage": report.token_usage,
     }
-    
+
     rendered = template.render(context)
     report_path.write_text(rendered, encoding="utf-8")
-    
+
     return report_path
 
 
@@ -87,17 +87,17 @@ def summarize(report: RunReport, cfg: Config) -> str:
     # Empty run
     if not report.done and not report.parked and not report.skipped and not report.errors:
         return "Empty run."
-    
+
     try:
         # Lazy import to allow test mocking
         from openai import OpenAI
-        
+
         provider_name = provider_of(cfg.models.report)
         provider_cfg = cfg.providers[provider_name]
         api_key = get_api_key(cfg, provider_name)
-        
+
         client = OpenAI(base_url=provider_cfg.base_url, api_key=api_key)
-        
+
         # Build serialized report (JSON-safe, no raw objects)
         serialized = {
             "done": [
@@ -114,10 +114,10 @@ def summarize(report: RunReport, cfg: Config) -> str:
             ],
             "errors": report.errors,
         }
-        
+
         # Extract model name (part after provider prefix)
         model_name = cfg.models.report.split("/", 1)[1]
-        
+
         response = client.chat.completions.create(
             model=model_name,
             messages=[
@@ -131,9 +131,10 @@ def summarize(report: RunReport, cfg: Config) -> str:
                 },
             ],
         )
-        
-        return response.choices[0].message.content.strip()
-    
+
+        content = response.choices[0].message.content
+        return content.strip() if content else _deterministic_summary(report)
+
     except Exception as e:
         logger.warning(f"LLM summarization failed: {e}; using deterministic fallback")
         return _deterministic_summary(report)
@@ -148,18 +149,18 @@ def discord_message(report: RunReport) -> str:
         emoji = "🟡"
     else:
         emoji = "🟢"
-    
+
     # Build base message
     message = f"{emoji} Nocturne: {len(report.done)} done, {len(report.parked)} parked, {len(report.errors)} errors"
-    
+
     # Append first PR URL if available
     if report.done and report.done[0].pr_url:
         message += f" — PR: {report.done[0].pr_url}"
-    
+
     # Truncate to 280 chars
     if len(message) > 280:
         return message[:277] + "..."
-    
+
     return message
 
 
@@ -191,7 +192,7 @@ def _format_task_report(task: "Task", duration_ms: Optional[int] = None) -> str:
 
 async def post_task_report(task: "Task", bot, duration_ms: int = 0) -> Optional[int]:
     """Post a single-task completion message to Discord (non-pinging).
-    
+
     Returns the Discord message ID (or None if bot is None/dispatch fails).
     Non-blocking on failure (logged + returns None).
     """

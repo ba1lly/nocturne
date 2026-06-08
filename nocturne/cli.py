@@ -15,11 +15,11 @@ from nocturne import __version__
 from nocturne._logging import SECRET_REGEX, get_logger, setup_logging
 from nocturne._opencode_check import ProviderNotRegistered, check_all_models_available
 from nocturne.config import Config, ConfigError, load_config
+from nocturne.models import RunReport
+from nocturne.orchestrator import process_task, run_batch
 from nocturne.reporter import summarize, write_report
 from nocturne.sources import github_issues
 from nocturne.store import Store
-from nocturne.models import RunReport
-from nocturne.orchestrator import process_task, run_batch
 
 log = get_logger("nocturne.cli")
 
@@ -281,6 +281,7 @@ def daemon(
 
     if once:
         import asyncio
+
         from nocturne.daemon import Daemon
         d = Daemon(cfg, store, bot=None)
         result = asyncio.run(d.run_one_cycle())
@@ -449,7 +450,7 @@ def skill_install(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing skill"),
 ) -> None:
     """Install a skill from URL, local file, or local directory."""
-    from nocturne.skills import install_skill, SkillExists, SkillInvalid, SkillError
+    from nocturne.skills import SkillError, SkillExists, SkillInvalid, install_skill
 
     try:
         name = install_skill(source, force=force)
@@ -468,9 +469,10 @@ def skill_install(
 @skill_app.command(name="list")
 def skill_list() -> None:
     """List all installed skills."""
-    from nocturne.skills import list_skills
     from rich.console import Console
     from rich.table import Table
+
+    from nocturne.skills import list_skills
 
     skills = list_skills()
     if not skills:
@@ -488,7 +490,7 @@ def skill_list() -> None:
 @skill_app.command(name="enable")
 def skill_enable(name: str = typer.Argument(...)) -> None:
     """Re-enable a previously disabled skill."""
-    from nocturne.skills import enable_skill, SkillNotFound
+    from nocturne.skills import SkillNotFound, enable_skill
 
     try:
         enable_skill(name)
@@ -501,7 +503,7 @@ def skill_enable(name: str = typer.Argument(...)) -> None:
 @skill_app.command(name="disable")
 def skill_disable(name: str = typer.Argument(...)) -> None:
     """Disable a skill (OpenCode will skip it)."""
-    from nocturne.skills import disable_skill, SkillNotFound
+    from nocturne.skills import SkillNotFound, disable_skill
 
     try:
         disable_skill(name)
@@ -534,7 +536,7 @@ def skill_uninstall(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
     """Uninstall a skill (removes the skill directory)."""
-    from nocturne.skills import uninstall_skill, SkillNotFound
+    from nocturne.skills import SkillNotFound, uninstall_skill
 
     if not yes:
         confirm = typer.confirm(f"Uninstall skill '{name}'?", default=False)
@@ -570,8 +572,8 @@ def resume(
             return
 
         # Use rich Table for clean output
-        from rich.table import Table
         from rich.console import Console
+        from rich.table import Table
 
         table = Table(title=f"Parked tasks ({len(parked)})")
         table.add_column("Task ID", style="cyan", no_wrap=False)

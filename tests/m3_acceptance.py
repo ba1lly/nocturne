@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("NOCTURNE_RUN_M3") != "1",
     reason="Set NOCTURNE_RUN_M3=1 to run live M3 acceptance",
@@ -187,7 +186,7 @@ def test_m3_issue_3_has_question_comment(state_dir):
 
 def test_m3_issue_5_not_falsely_parked(state_dir):
     """Step 5: Assert Issue #5 (literal sentinel) is NOT falsely parked.
-    
+
     CRITICAL: This is the false-positive guard. Issue #5 contains a literal
     sentinel string in its body but should NOT be parked (Task 13's last-event-only
     detector should prevent this).
@@ -213,7 +212,7 @@ def test_m3_issue_5_not_falsely_parked(state_dir):
 def test_m3_resume_issue_3(state_dir):
     """Step 6: Resume Issue #3 with concrete answer."""
     answer = "Add a function median(values) that returns the median of a list of numbers, with tests covering empty list (ValueError), single value, even count, odd count."
-    
+
     result = subprocess.run(
         [
             ".venv/bin/nocturne",
@@ -333,7 +332,7 @@ def test_m3_pr_created_for_issue_3(state_dir):
 
 def test_m3_no_duplicate_question_comments(state_dir):
     """Step 10: Assert no duplicate question comments on Issue #3 (Metis invariant).
-    
+
     CRITICAL: Metis flagged this as a regression risk. We must ensure that
     the question comment is posted exactly once, not duplicated on retries.
     """
