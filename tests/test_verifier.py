@@ -161,3 +161,40 @@ def test_diff_includes_test_detects_feature_branch(tmp_worktree: Path) -> None:
     commit_file(tmp_worktree, "tests/test_a.py", "def test_a():\n    assert True\n", "add test a")
 
     assert diff_includes_test(tmp_worktree) is True
+
+
+def test_diff_includes_test_detects_uncommitted_modification(tmp_worktree: Path) -> None:
+    commit_file(
+        tmp_worktree, "tests/test_existing.py",
+        "def test_old():\n    assert True\n", "seed existing test",
+    )
+    subprocess.run(["git", "-C", str(tmp_worktree), "checkout", "-b", "wip"], check=True)
+    (tmp_worktree / "tests" / "test_existing.py").write_text(
+        "def test_old():\n    assert True\n\n\ndef test_new():\n    assert 1 == 1\n",
+        encoding="utf-8",
+    )
+
+    assert diff_includes_test(tmp_worktree) is True
+
+
+def test_diff_includes_test_detects_untracked_test_file(tmp_worktree: Path) -> None:
+    subprocess.run(["git", "-C", str(tmp_worktree), "checkout", "-b", "wip-untracked"], check=True)
+    (tmp_worktree / "tests").mkdir(exist_ok=True)
+    (tmp_worktree / "tests" / "test_brand_new.py").write_text(
+        "def test_new():\n    assert True\n", encoding="utf-8",
+    )
+
+    assert diff_includes_test(tmp_worktree) is True
+
+
+def test_diff_includes_test_false_when_only_source_modified(tmp_worktree: Path) -> None:
+    commit_file(
+        tmp_worktree, "src/playground/math.py",
+        "def divide(a, b):\n    return a / (b + 1)\n", "seed bug",
+    )
+    subprocess.run(["git", "-C", str(tmp_worktree), "checkout", "-b", "wip-no-test"], check=True)
+    (tmp_worktree / "src" / "playground" / "math.py").write_text(
+        "def divide(a, b):\n    return a / b\n", encoding="utf-8",
+    )
+
+    assert diff_includes_test(tmp_worktree) is False

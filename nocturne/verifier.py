@@ -33,6 +33,24 @@ def diff_includes_test(worktree: Path, base: str = "main") -> bool:
         for line in (proc.stdout or "").splitlines():
             if is_test_file(line.strip()):
                 return True
+
+    try:
+        status = subprocess.run(
+            ["git", "-C", str(worktree), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+    if status.returncode != 0:
+        return False
+    for line in (status.stdout or "").splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if is_test_file(path):
+            return True
     return False
 
 
