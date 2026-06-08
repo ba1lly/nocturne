@@ -61,8 +61,41 @@ def global_callback(
     _state.verbose = verbose
 
 
+def _autoload_env_file() -> None:
+    """Auto-source ~/.config/nocturne/env (or the dir adjacent to --config) into os.environ.
+
+    Idempotent — only sets keys not already present, so the user's shell exports always win.
+    KEY=VALUE format; lines starting with # or blank are skipped.
+    """
+    import os
+    candidates = [
+        Path(_state.config).expanduser().parent / "env",
+        Path.home() / ".config" / "nocturne" / "env",
+    ]
+    seen: set[Path] = set()
+    for env_file in candidates:
+        env_file = env_file.resolve()
+        if env_file in seen or not env_file.exists():
+            continue
+        seen.add(env_file)
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
 def _load_cfg(cfg_path: Path) -> Config:
-    """Load config, exit 2 on error."""
+    """Load config, exit 2 on error.
+
+    Auto-sources the env file so users don't have to `set -a; source ~/.config/nocturne/env`
+    in every shell. Existing env vars always take precedence over the file.
+    """
+    _autoload_env_file()
     try:
         return load_config(cfg_path)
     except FileNotFoundError:
