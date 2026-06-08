@@ -23,7 +23,12 @@ except Exception:
     print("")
 PY
 )
-    [[ -z "$owner" ]] && owner="${_cfg[0]:-ba1lly}"
+    [[ -z "$owner" ]] && owner="${_cfg[0]:-}"
+    if [[ -z "$owner" ]]; then
+      echo "ERROR: GitHub owner not found in config or GITHUB_OWNER env var." >&2
+      echo "Please run 'bash scripts/setup.sh' first." >&2
+      exit 1
+    fi
     [[ -z "$repo_name" ]] && repo_name="${_cfg[1]:-nocturne-playground}"
     [[ -z "$checkout_path" ]] && checkout_path="$HOME/projects/${repo_name}-checkout"
   fi
@@ -95,7 +100,7 @@ pushd "$SANDBOX_CHECKOUT_PATH" >/dev/null
 if [[ -n "$(git status --porcelain)" ]]; then
   git add pyproject.toml src/playground/__init__.py src/playground/math.py tests/test_math.py README.md
   if ! git diff --cached --quiet; then
-    git -c user.name=ba1lly -c user.email=ba1lly@users.noreply.github.com commit -m "feat: seed playground with buggy math module"
+    git -c user.name="$GITHUB_OWNER" -c user.email="${GITHUB_OWNER}@users.noreply.github.com" commit -m "feat: seed playground with buggy math module"
   fi
 fi
 
