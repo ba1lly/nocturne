@@ -508,6 +508,91 @@ def test_run_batch_skip_not_passed_to_process_task(
     assert report.parked == []
 
 
+def test_run_batch_need_input_posts_question_comment(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c, **_kw: [
+            (t1, _make_triage_result(t1, "NEED_INPUT", 25, "Which functions should I improve?")),
+        ],
+    )
+
+    posted: list[tuple[str, int, str]] = []
+
+    def recorder(repo_slug: str, issue_number: int, question: str) -> None:
+        posted.append((repo_slug, issue_number, question))
+
+    monkeypatch.setattr("nocturne.askflow.post_park_comment", recorder)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(posted) == 1
+    assert posted[0][1] == 3
+    assert posted[0][2] == "Which functions should I improve?"
+    assert len(report.parked) == 1
+    assert report.parked[0].question == "Which functions should I improve?"
+
+    persisted = inmem_store.get_task(t1.id)
+    assert persisted is not None
+    assert persisted.status == "parked"
+
+
+def test_run_batch_need_input_dry_run_does_not_post(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c, **_kw: [
+            (t1, _make_triage_result(t1, "NEED_INPUT", 25, "What's the spec?")),
+        ],
+    )
+
+    posted: list[tuple[str, int, str]] = []
+
+    def recorder(repo_slug: str, issue_number: int, question: str) -> None:
+        posted.append((repo_slug, issue_number, question))
+
+    monkeypatch.setattr("nocturne.askflow.post_park_comment", recorder)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store, dry_run=True)
+
+    assert posted == [], "dry_run=True must not invoke post_park_comment"
+    assert len(report.parked) == 1
+    assert report.parked[0].question == "What's the spec?"
+
+
+def test_run_batch_need_input_falls_back_when_reason_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c, **_kw: [
+            (t1, _make_triage_result(t1, "NEED_INPUT", 25, "")),
+        ],
+    )
+
+    posted: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        "nocturne.askflow.post_park_comment",
+        lambda repo_slug, issue_number, question: posted.append((repo_slug, issue_number, question)),
+    )
+
+    orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(posted) == 1
+    assert posted[0][2], "fallback question must be non-empty"
+
+
 def test_run_batch_ordering_respected(
     monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
 ) -> None:

@@ -208,32 +208,25 @@ class HITLState(TypedDict, total=False):
     attempt: int
 
 
-def post_park_comment_node(state: HITLState, store: Store) -> dict[str, Any]:
-    """Post the parked question as a gh issue comment.
+def post_park_comment(repo_slug: str, issue_number: int, question: str) -> None:
+    """Idempotently post a question comment for a parked task.
 
-    Runs AFTER `park_node`'s interrupt resumes. Idempotent: checks for an
-    existing question marker via `gh issue view --jq` before posting. gh
-    failures are non-blocking (logged + swallowed).
-
-    Exposed at module level so unit tests can exercise it directly without
-    spinning up the full graph (the graph's interrupt machinery is hard to
-    drive in pytest).
+    Mirrors `triage.post_skip_comment`: checks for an existing question
+    marker first, posts only if absent. gh failures are non-blocking
+    (logged + swallowed); silently missing the post is worse than a
+    duplicate comment.
     """
     from nocturne._gh_retry import GhError, run_gh
 
-    task = state["task"]
-    question = state.get("question") or ""
-
-    # Idempotency check — if a question marker comment already exists, skip.
     try:
         existing = run_gh(
             [
                 "gh",
                 "issue",
                 "view",
-                str(task.issue_number),
+                str(issue_number),
                 "--repo",
-                task.repo_slug,
+                repo_slug,
                 "--json",
                 "comments",
                 "--jq",
@@ -243,19 +236,17 @@ def post_park_comment_node(state: HITLState, store: Store) -> dict[str, Any]:
         if existing and existing.strip():
             logger.info(
                 "question comment already exists on %s#%s; skipping post",
-                task.repo_slug,
-                task.issue_number,
+                repo_slug,
+                issue_number,
             )
-            return {}
+            return
     except GhError as exc:
         logger.warning(
             "could not check existing question comments on %s#%s: %s",
-            task.repo_slug,
-            task.issue_number,
+            repo_slug,
+            issue_number,
             exc,
         )
-        # Fall through and attempt to post — one duplicate is acceptable; a
-        # silent miss is not.
 
     body = f"{QUESTION_MARKER}\n[Nocturne] {question}"
     try:
@@ -264,26 +255,27 @@ def post_park_comment_node(state: HITLState, store: Store) -> dict[str, Any]:
                 "gh",
                 "issue",
                 "comment",
-                str(task.issue_number),
+                str(issue_number),
                 "--repo",
-                task.repo_slug,
+                repo_slug,
                 "--body",
                 body,
             ]
         )
-        logger.info(
-            "posted question comment on %s#%s",
-            task.repo_slug,
-            task.issue_number,
-        )
+        logger.info("posted question comment on %s#%s", repo_slug, issue_number)
     except GhError as exc:
         logger.warning(
             "failed to post question comment on %s#%s (non-blocking): %s",
-            task.repo_slug,
-            task.issue_number,
+            repo_slug,
+            issue_number,
             exc,
         )
 
+
+def post_park_comment_node(state: HITLState, store: Store) -> dict[str, Any]:
+    task = state["task"]
+    question = state.get("question") or ""
+    post_park_comment(task.repo_slug, task.issue_number, question)
     return {}
 
 

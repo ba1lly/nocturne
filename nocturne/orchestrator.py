@@ -191,9 +191,26 @@ def _dispatch_triaged(
     if tr.outcome == "SKIP":
         return "skipped"
     if tr.outcome == "NEED_INPUT":
-        # M3 (Task 25) will wire askflow.park_task — in M2 we record parked status only.
+        from nocturne.askflow import park_task, post_park_comment
+
         store.insert_task(task)
-        store.update_status(task.id, "parked")
+        question = tr.reason or "Triage flagged this issue as ambiguous; please clarify."
+        park_task(task, question, store)
+        if not dry_run:
+            try:
+                post_park_comment(task.repo_slug, task.issue_number, question)
+            except Exception as exc:  # noqa: BLE001 — batch must keep going
+                log = get_logger("nocturne.orchestrator")
+                log.warning(
+                    "post_park_comment unexpectedly raised on %s#%s (swallowed): %s",
+                    task.repo_slug, task.issue_number, exc,
+                )
+        else:
+            log = get_logger("nocturne.orchestrator")
+            log.info(
+                "dry-run: would have posted question comment on %s#%s",
+                task.repo_slug, task.issue_number,
+            )
         return "parked"
     store.insert_task(task)
     result_task = process_task(task, cfg, store, dry_run=dry_run)
