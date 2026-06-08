@@ -87,15 +87,18 @@ class GuardrailsConfig(StrictBaseModel):
 class DiscordConfig(StrictBaseModel):
     enabled: bool = True
     bot_token_env: str = "NOCTURNE_DISCORD_TOKEN"
-    channel_id: int = Field(default=0, validate_default=True)
-    mention_user_id: int = Field(default=0, validate_default=True)
+    channel_id: int = 0
+    mention_user_id: int = 0
 
-    @field_validator("channel_id", "mention_user_id", mode="before")
-    @classmethod
-    def _reject_zero(cls, value: object, info) -> object:
-        if value == 0:
-            raise ConfigError(f"{info.field_name} must be non-zero")
-        return value
+    @model_validator(mode="after")
+    def _check_ids_when_enabled(self) -> "DiscordConfig":
+        if not self.enabled:
+            return self
+        if self.channel_id == 0:
+            raise ConfigError("channel_id must be non-zero when discord.enabled is true")
+        if self.mention_user_id == 0:
+            raise ConfigError("mention_user_id must be non-zero when discord.enabled is true")
+        return self
 
 
 class DaemonConfig(StrictBaseModel):

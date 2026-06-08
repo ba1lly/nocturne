@@ -126,57 +126,85 @@ if ! $NON_INTERACTIVE; then
   read -rp "Sandbox repo name [$SANDBOX_REPO]: " input
   SANDBOX_REPO="${input:-$SANDBOX_REPO}"
 
-  # 3. Provider menu
+  # [3/6] Provider menu — accepts number OR name
   echo ""
-  echo "Choose your LLM provider:"
+  echo "[3/6] Choose your LLM provider:"
   i=1
   for p in "${PROVIDER_ORDER[@]}"; do
     echo "  $i) $p  →  env: ${PROVIDER_ENV[$p]}, reasoning: ${PROVIDER_REASONING[$p]}, coding: ${PROVIDER_CODING[$p]}"
     i=$((i+1))
   done
-  read -rp "Provider [1=$PROVIDER]: " input
-  if [ -n "$input" ] && [[ "$input" =~ ^[0-9]+$ ]]; then
-    idx=$((input-1))
-    if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PROVIDER_ORDER[@]}" ]; then
-      PROVIDER="${PROVIDER_ORDER[$idx]}"
+  while true; do
+    read -rp "Provider [1=$PROVIDER, or name]: " input
+    input="${input:-1}"
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+      idx=$((input-1))
+      if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PROVIDER_ORDER[@]}" ]; then
+        PROVIDER="${PROVIDER_ORDER[$idx]}"
+        break
+      fi
+    elif [ -n "${PROVIDER_BASE_URL[$input]:-}" ]; then
+      PROVIDER="$input"
+      break
+    fi
+    echo "  invalid: '$input'. valid: ${PROVIDER_ORDER[*]}"
+  done
+
+  # Resolve provider-derived defaults NOW (before secret prompts that label themselves with API_KEY_ENV)
+  API_KEY_ENV="${PROVIDER_ENV[$PROVIDER]}"
+
+  # [4/6] Optional model overrides
+  echo ""
+  echo "[4/6] Models for $PROVIDER (Enter to accept defaults):"
+  read -rp "  reasoning [${PROVIDER_REASONING[$PROVIDER]}]: " input
+  REASONING_MODEL="${input:-${PROVIDER_REASONING[$PROVIDER]}}"
+  read -rp "  coding    [${PROVIDER_CODING[$PROVIDER]}]: " input
+  CODING_MODEL="${input:-${PROVIDER_CODING[$PROVIDER]}}"
+  read -rp "  report    [$REASONING_MODEL]: " input
+  REPORT_MODEL="${input:-$REASONING_MODEL}"
+
+  # [5/6] Discord HITL
+  echo ""
+  echo "[5/6] Discord HITL (parked-task notifications + slash commands):"
+  echo "  Set channel ID + user ID to 0 to skip Discord entirely."
+  read -rp "  channel ID (0 to skip) [$DISCORD_CHANNEL]: " input
+  DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
+  read -rp "  mention user ID (0 to skip) [$DISCORD_USER]: " input
+  DISCORD_USER="${input:-$DISCORD_USER}"
+
+  # [6/6] Token values — input hidden. Writes ~/.config/nocturne/env (mode 600) if provided.
+  echo ""
+  echo "[6/6] Secret tokens — input hidden; press Enter to skip and export in shell later."
+  echo "      Values stored in ~/.config/nocturne/env (mode 600) for systemd + shell sourcing."
+  echo ""
+
+  if [ -n "${!API_KEY_ENV:-}" ]; then
+    echo "  $API_KEY_ENV is already set in your current shell."
+    read -rp "  → reuse it in env file? [Y/n]: " input
+    if [[ ! "$input" =~ ^[Nn]$ ]]; then
+      API_KEY_VALUE="${!API_KEY_ENV}"
+    fi
+  else
+    read -srp "  $API_KEY_ENV (input hidden, Enter to skip): " API_KEY_VALUE; echo
+  fi
+
+  if [ "$DISCORD_CHANNEL" != "0" ] && [ "$DISCORD_USER" != "0" ]; then
+    if [ -n "${NOCTURNE_DISCORD_TOKEN:-}" ]; then
+      echo "  NOCTURNE_DISCORD_TOKEN is already set in your current shell."
+      read -rp "  → reuse it in env file? [Y/n]: " input
+      if [[ ! "$input" =~ ^[Nn]$ ]]; then
+        DISCORD_TOKEN_VALUE="$NOCTURNE_DISCORD_TOKEN"
+      fi
+    else
+      read -srp "  NOCTURNE_DISCORD_TOKEN (input hidden, Enter to skip): " DISCORD_TOKEN_VALUE; echo
     fi
   fi
 
-  # 4. Optional model overrides
-  echo ""
-  echo "Defaults for $PROVIDER:"
-  echo "  reasoning: ${PROVIDER_REASONING[$PROVIDER]}"
-  echo "  coding:    ${PROVIDER_CODING[$PROVIDER]}"
-  read -rp "Override reasoning model [${PROVIDER_REASONING[$PROVIDER]}]: " input
-  REASONING_MODEL="${input:-${PROVIDER_REASONING[$PROVIDER]}}"
-  read -rp "Override coding model [${PROVIDER_CODING[$PROVIDER]}]: " input
-  CODING_MODEL="${input:-${PROVIDER_CODING[$PROVIDER]}}"
-  read -rp "Override report model [$REASONING_MODEL]: " input
-  REPORT_MODEL="${input:-$REASONING_MODEL}"
-
-  # 5. Discord HITL
-  echo ""
-  echo "Discord HITL (parked-task notifications + slash commands):"
-  echo "  Set channel ID + user ID to 0 to skip Discord entirely."
-  read -rp "Discord channel ID (0 to skip) [$DISCORD_CHANNEL]: " input
-  DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
-  read -rp "Discord mention user ID (0 to skip) [$DISCORD_USER]: " input
-  DISCORD_USER="${input:-$DISCORD_USER}"
-
-  # 6. Token values — inline. Writes ~/.config/nocturne/env (mode 600) if provided.
-  echo ""
-  echo "Token values (input HIDDEN; press Enter to skip and set via shell export later)."
-  echo "If you provide any value, it will be written to ~/.config/nocturne/env (mode 600,"
-  echo "loaded by the systemd unit via EnvironmentFile= and exportable in your shell)."
-  read -srp "  $API_KEY_ENV: " API_KEY_VALUE; echo
-  if [ "$DISCORD_CHANNEL" != "0" ]; then
-    read -srp "  NOCTURNE_DISCORD_TOKEN (Discord bot token): " DISCORD_TOKEN_VALUE; echo
-  fi
   if [ -n "${API_KEY_VALUE:-}" ] || [ -n "${DISCORD_TOKEN_VALUE:-}" ]; then
     WRITE_ENV_FILE=true
   fi
 
-  # 7. Reviewer skill
+  # Reviewer skill (M5 precondition)
   if [ -d "$HOME/.agents/skills/reviewer" ]; then
     read -rp "Install reviewer skill from ~/.agents/skills/reviewer/? [y/N]: " input
     [[ "$input" =~ ^[Yy]$ ]] && INSTALL_REVIEWER=true
@@ -207,14 +235,53 @@ if [ -z "${PROVIDER_BASE_URL[$PROVIDER]:-}" ]; then
   echo "Valid: ${PROVIDER_ORDER[*]}" >&2
   exit 2
 fi
+if [[ ! "$API_KEY_ENV" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+  echo "ERROR: --api-key-env must be an ENV VAR NAME like DASHSCOPE_API_KEY," >&2
+  echo "       not an actual key value. Got: $API_KEY_ENV" >&2
+  exit 2
+fi
 
 # -- Create config dir --
 mkdir -p "$CONFIG_DIR"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 
-if [ -f "$CONFIG_FILE" ] && ! $FORCE; then
-  echo "ERROR: $CONFIG_FILE already exists (pass --force to overwrite)" >&2
-  exit 2
+if [ -f "$CONFIG_FILE" ]; then
+  # Detect leaked api_key_env from a previous bad run (secret value instead of env name).
+  EXISTING_BAD=$(grep -E '^\s+api_key_env:' "$CONFIG_FILE" 2>/dev/null \
+    | grep -vE 'api_key_env: "[A-Z_][A-Z0-9_]*"' || true)
+  if [ -n "$EXISTING_BAD" ]; then
+    echo "" >&2
+    echo "⚠️  SECURITY WARNING — existing config has a suspicious api_key_env value:" >&2
+    echo "$EXISTING_BAD" >&2
+    echo "    This may be an actual API key. If so, rotate it before continuing." >&2
+    echo "" >&2
+  fi
+
+  if $FORCE; then
+    cp -p "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+    echo "  → backed up existing config to ${CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+  elif $NON_INTERACTIVE || [ ! -t 0 ]; then
+    echo "ERROR: $CONFIG_FILE already exists. Refusing to overwrite in non-interactive mode." >&2
+    echo "       Rerun with --force to overwrite (a timestamped .bak will be created)." >&2
+    exit 2
+  else
+    echo ""
+    echo "Config already exists: $CONFIG_FILE"
+    read -rp "Overwrite (a .bak will be created)? [y/N]: " input
+    if [[ ! "$input" =~ ^[Yy]$ ]]; then
+      echo "Aborted. To force overwrite later, run: bash $0 --force"
+      exit 1
+    fi
+    cp -p "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+    echo "  → backed up existing config"
+    FORCE=true
+  fi
+fi
+
+# Discord enabled flag — false when both IDs are 0 (loader will then skip the channel/user validators).
+DISCORD_ENABLED=true
+if [ "$DISCORD_CHANNEL" = "0" ] && [ "$DISCORD_USER" = "0" ]; then
+  DISCORD_ENABLED=false
 fi
 
 PROVIDER_BASE_URL_VAL="${PROVIDER_BASE_URL[$PROVIDER]}"
@@ -261,7 +328,7 @@ guardrails:
   allow_auto_merge: false
 
 discord:
-  enabled: true
+  enabled: $DISCORD_ENABLED
   bot_token_env: "NOCTURNE_DISCORD_TOKEN"
   channel_id: $DISCORD_CHANNEL
   mention_user_id: $DISCORD_USER
@@ -309,15 +376,22 @@ if $INSTALL_REVIEWER; then
 fi
 
 # -- Write ~/.config/nocturne/env (for systemd + shell sourcing) --
+# Merge with existing entries instead of clobbering, so e.g. the user can run setup
+# twice — once to set the API key, once to set the Discord token — without losing either.
 ENV_FILE="$CONFIG_DIR/env"
 if $WRITE_ENV_FILE; then
-  {
-    [ -n "${API_KEY_VALUE:-}" ]      && printf '%s=%s\n' "$API_KEY_ENV" "$API_KEY_VALUE"
-    [ -n "${DISCORD_TOKEN_VALUE:-}" ] && printf 'NOCTURNE_DISCORD_TOKEN=%s\n' "$DISCORD_TOKEN_VALUE"
-  } > "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
+  TMP_ENV=$(mktemp)
+  if [ -f "$ENV_FILE" ]; then
+    cp -p "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+    grep -vE "^(${API_KEY_ENV}|NOCTURNE_DISCORD_TOKEN)=" "$ENV_FILE" > "$TMP_ENV" || true
+  fi
+  [ -n "${API_KEY_VALUE:-}" ]      && printf '%s=%s\n' "$API_KEY_ENV" "$API_KEY_VALUE" >> "$TMP_ENV"
+  [ -n "${DISCORD_TOKEN_VALUE:-}" ] && printf 'NOCTURNE_DISCORD_TOKEN=%s\n' "$DISCORD_TOKEN_VALUE" >> "$TMP_ENV"
+  install -m 600 "$TMP_ENV" "$ENV_FILE"
+  rm -f "$TMP_ENV"
   echo ""
   echo "  → wrote $ENV_FILE (mode 600)"
+  echo "    ⚠️  Contains secret token values. Do NOT commit, paste, or share this file."
   echo "    To load in your current shell:  set -a; source $ENV_FILE; set +a"
 fi
 
