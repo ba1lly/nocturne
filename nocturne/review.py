@@ -93,8 +93,31 @@ def _ensure_reviewer_skill(cfg: Config) -> tuple[Optional[str], bool]:
     return None, False
 
 
-def _compute_diff(worktree: Path, base: str = "main") -> str:
-    """Compute the diff between origin/<base>..HEAD in the worktree."""
+def _compute_diff(pr_url: str, worktree: Path, base: str = "main") -> str:
+    """Compute the PR diff. Prefers `gh pr diff` since it works regardless of
+    whether the local worktree still exists (e.g. after process_task cleanup).
+
+    Falls back to local `git diff` in the worktree if gh fails AND the
+    worktree is intact — useful for offline testing or when the PR URL
+    can't be parsed.
+    """
+    m = re.match(r"https?://github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_url or "")
+    if m:
+        slug, pr_num = m.group(1), m.group(2)
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "diff", pr_num, "--repo", slug],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout
+            logger.info(
+                "gh pr diff returned non-zero or empty for %s (rc=%s); "
+                "falling back to local git diff", pr_url, result.returncode,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.info("gh pr diff failed for %s: %s; falling back", pr_url, e)
+
     try:
         result = subprocess.run(
             ["git", "-C", str(worktree), "diff", f"origin/{base}..HEAD"],
@@ -102,7 +125,6 @@ def _compute_diff(worktree: Path, base: str = "main") -> str:
         )
         return result.stdout
     except subprocess.CalledProcessError:
-        # Fallback to local base without origin
         try:
             result = subprocess.run(
                 ["git", "-C", str(worktree), "diff", f"{base}..HEAD"],
@@ -188,7 +210,7 @@ def review_pr(
 
     skill_used = skill_name_or_none or f"opencode-builtin:{cfg.review.fallback_slash_command}"
 
-    diff = _compute_diff(worktree, base=base)
+    diff = _compute_diff(pr_url, worktree, base=base)
     if not diff.strip():
         logger.info("empty diff for %s; reporting clean", pr_url)
         return ReviewResult(

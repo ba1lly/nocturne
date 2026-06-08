@@ -700,6 +700,44 @@ def test_run_batch_mixed_fresh_resumed_and_done(
     assert report.errors == []
 
 
+def test_partition_eligible_respects_all_lifecycle_states(
+    tmp_worktree: Path, inmem_store: Store,
+) -> None:
+    """Regression guard for the daemon-reprocess bug observed in M5 Test 3.
+
+    The daemon log showed it re-processed already-done tasks in cycle 2
+    because the daemon called triage_batch directly instead of going
+    through partition_eligible. This test pins the helper's contract so
+    both run_batch and daemon.run_one_cycle stay in lockstep.
+    """
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/repo#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/repo#2").model_copy(update={"issue_number": 2})
+    t3 = _make_task(tmp_worktree, task_id="ba1lly/repo#3").model_copy(update={"issue_number": 3})
+    t4 = _make_task(tmp_worktree, task_id="ba1lly/repo#4").model_copy(update={"issue_number": 4})
+    t5 = _make_task(tmp_worktree, task_id="ba1lly/repo#5").model_copy(update={"issue_number": 5})
+    t6 = _make_task(tmp_worktree, task_id="ba1lly/repo#6").model_copy(update={"issue_number": 6})
+
+    inmem_store.insert_task(t1)
+    inmem_store.update_status(t1.id, "done")
+    inmem_store.insert_task(t2)
+    inmem_store.park_task(t2.id, "?")
+    inmem_store.insert_task(t3)
+    inmem_store.park_task(t3.id, "?")
+    inmem_store.resume_task(t3.id, "real answer")
+    inmem_store.insert_task(t5)
+    inmem_store.update_status(t5.id, "failed")
+    inmem_store.insert_task(t6)
+    inmem_store.update_status(t6.id, "aborted")
+
+    fetched = [t1, t2, t3, t4, t5, t6]
+
+    to_triage, resumed = orchestrator.partition_eligible(fetched, inmem_store)
+
+    assert {t.id for t in to_triage} == {t4.id}, "only fresh #4 should be triaged"
+    assert {t.id for t in resumed} == {t3.id}, "only resumed #3 should bypass triage"
+    assert (resumed[0].answer or "").startswith("real answer"), "must return stored row with persisted answer"
+
+
 def test_run_batch_ordering_respected(
     monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
 ) -> None:

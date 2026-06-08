@@ -40,7 +40,69 @@ def _patch_skill_enabled(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None
 
 
 def _patch_diff(monkeypatch: pytest.MonkeyPatch, diff: str) -> None:
-    monkeypatch.setattr(review_mod, "_compute_diff", lambda worktree, base="main": diff)
+    monkeypatch.setattr(review_mod, "_compute_diff", lambda pr_url, worktree, base="main": diff)
+
+
+def test_compute_diff_uses_gh_pr_diff_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Regression guard for the silent 'empty diff -> clean' bug observed
+    when review fired after worktree cleanup. _compute_diff must try
+    'gh pr diff' first since it works without a local worktree."""
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if list(args[:3]) == ["gh", "pr", "diff"]:
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=0,
+                stdout="diff --git a/x.py b/x.py\n+real content\n", stderr="",
+            )
+        raise AssertionError(f"git diff should not be called when gh pr diff succeeds: {args!r}")
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+
+    diff = review_mod._compute_diff(
+        "https://github.com/ba1lly/nocturne-playground/pull/42",
+        tmp_path / "nonexistent-worktree",
+    )
+
+    assert "real content" in diff, "must return content from gh pr diff"
+    assert any(c[:3] == ["gh", "pr", "diff"] for c in calls), "must invoke gh pr diff"
+    assert any("42" in c for c in calls), "must pass the PR number"
+
+
+def test_compute_diff_falls_back_to_local_git_when_gh_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """If gh pr diff fails (no auth / not installed), fall back to local
+    git diff. This is the offline / pre-pushed case."""
+    fake_wt = tmp_path / "wt"
+    fake_wt.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if list(args[:3]) == ["gh", "pr", "diff"]:
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=1, stdout="", stderr="no auth",
+            )
+        if list(args[:2]) == ["git", "-C"]:
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=0,
+                stdout="diff --git a/y.py b/y.py\n+local content\n", stderr="",
+            )
+        raise AssertionError(f"unexpected: {args!r}")
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+
+    diff = review_mod._compute_diff(
+        "https://github.com/ba1lly/nocturne-playground/pull/42", fake_wt,
+    )
+
+    assert "local content" in diff
+    assert any(c[:3] == ["gh", "pr", "diff"] for c in calls), "must try gh first"
+    assert any(c[:2] == ["git", "-C"] for c in calls), "must fall back to local git"
 
 
 def _patch_opencode(

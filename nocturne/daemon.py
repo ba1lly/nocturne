@@ -145,8 +145,48 @@ class Daemon:
                 continue
             cycle_summary["fetched"] += len(issues)
 
+            from nocturne.orchestrator import partition_eligible
+            to_triage, resumed = partition_eligible(issues, self.store)
+
+            for task in resumed:
+                cycle_summary["doable"] += 1
+                try:
+                    result_task = await asyncio.to_thread(
+                        process_task, task, self.cfg, self.store
+                    )
+                    if result_task.status == "done":
+                        cycle_summary["processed_done"] += 1
+                        cycle_done.append(result_task)
+                    else:
+                        cycle_summary["processed_failed"] += 1
+                        cycle_failed.append(result_task)
+                    if self.bot is not None:
+                        from nocturne.reporter import post_task_report
+                        try:
+                            await post_task_report(result_task, self.bot)
+                        except Exception as e:
+                            logger.warning("Discord task report failed (non-blocking): %s", e)
+                    if (
+                        self.cfg.review.enabled
+                        and result_task.status == "done"
+                        and result_task.pr_url
+                    ):
+                        self._schedule_review(result_task)
+                except Exception as e:
+                    logger.error("process_task raised for resumed %s: %s", task.id, e)
+                    cycle_summary["errors"].append(f"resumed:{task.id}:{e}")
+                self._tokens_used += 5000
+                if self._is_budget_exhausted():
+                    cycle_summary["budget_exhausted"] = True
+                    break
+
+            if cycle_summary.get("budget_exhausted") or not to_triage:
+                if cycle_summary.get("budget_exhausted"):
+                    break
+                continue
+
             try:
-                triaged = await asyncio.to_thread(triage_batch, issues, self.cfg)
+                triaged = await asyncio.to_thread(triage_batch, to_triage, self.cfg)
             except Exception as e:
                 logger.warning("triage_batch failed for %s: %s", repo_cfg.slug, e)
                 cycle_summary["errors"].append(f"triage:{repo_cfg.slug}:{e}")
@@ -165,14 +205,12 @@ class Daemon:
                         else:
                             cycle_summary["processed_failed"] += 1
                             cycle_failed.append(result_task)
-                        # Post task completion to Discord (non-blocking)
                         if self.bot is not None:
                             from nocturne.reporter import post_task_report
                             try:
                                 await post_task_report(result_task, self.bot)
                             except Exception as e:
                                 logger.warning("Discord task report failed (non-blocking): %s", e)
-                        # Schedule reviewer post-done (non-blocking background task)
                         if (
                             self.cfg.review.enabled
                             and result_task.status == "done"
@@ -182,8 +220,6 @@ class Daemon:
                     except Exception as e:
                         logger.error("process_task raised for %s: %s", task.id, e)
                         cycle_summary["errors"].append(f"process:{task.id}:{e}")
-                    # Heuristic token estimate; real value comes from OpenCode
-                    # usage accounting which is not yet exposed.
                     self._tokens_used += 5000
                     if self._is_budget_exhausted():
                         logger.warning(

@@ -175,6 +175,43 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
     return task
 
 
+def partition_eligible(
+    issues: list[Task], store: Store,
+) -> tuple[list[Task], list[Task]]:
+    """Partition fetched issues against existing store state.
+
+    Returns (to_triage, resumed) where:
+      - to_triage: fresh tasks not yet in store; go to triage_batch
+      - resumed:   tasks in store with status='selected' AND non-empty answer
+                   (i.e. user resumed them via `nocturne resume`); bypass triage
+                   and go directly to process_task with the stored row
+      - Everything else (done, aborted, parked, skipped, running, failed,
+        selected-without-answer) is silently dropped — already handled this
+        lifecycle. An INFO log records the skip per task.
+
+    Shared between orchestrator.run_batch (CLI run-once path) and
+    daemon.run_one_cycle (long-running daemon poll). Centralising this is
+    why bug class 'daemon reprocesses already-done tasks' (M5 Test 3
+    regression) doesn't return.
+    """
+    log = get_logger("nocturne.orchestrator")
+    to_triage: list[Task] = []
+    resumed: list[Task] = []
+    for task in issues:
+        existing = store.get_task(task.id)
+        if existing is None:
+            to_triage.append(task)
+            continue
+        if existing.status == "selected" and (existing.answer or "").strip():
+            resumed.append(existing)
+            continue
+        log.info(
+            "task %s already in store (status=%s); skipping in this batch",
+            task.id, existing.status,
+        )
+    return to_triage, resumed
+
+
 def _dispatch_triaged(
     task: Task,
     tr: TriageResult,
@@ -258,20 +295,7 @@ def run_batch(
 
     log.info("fetched %s eligible issues from %s", len(issues), repo_cfg.slug)
 
-    to_triage: list[Task] = []
-    resumed: list[Task] = []
-    for task in issues:
-        existing = store.get_task(task.id)
-        if existing is None:
-            to_triage.append(task)
-            continue
-        if existing.status == "selected" and (existing.answer or "").strip():
-            resumed.append(existing)
-            continue
-        log.info(
-            "task %s already in store (status=%s); skipping in this batch",
-            task.id, existing.status,
-        )
+    to_triage, resumed = partition_eligible(issues, store)
 
     if resumed or to_triage:
         log.info(
