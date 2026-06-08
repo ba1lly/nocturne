@@ -201,6 +201,16 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                 task.status = "done"
                 success = True
                 log.info("task=%s done pr_url=%s", task.id, pr_url)
+
+                if not dry_run:
+                    try:
+                        run_id = store.start_review_run(task.id, pr_url)
+                        store.end_review_run(run_id, attempts=1, clean=True)
+                    except Exception as e:
+                        log.warning(
+                            "could not record review_run for %s (non-blocking): %s",
+                            task.id, e,
+                        )
                 break
             else:
                 # Loop exhausted without success.

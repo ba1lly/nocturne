@@ -700,6 +700,42 @@ def test_run_batch_mixed_fresh_resumed_and_done(
     assert report.errors == []
 
 
+def test_process_task_writes_review_runs_row_on_success(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
+) -> None:
+    """Approach 1 review-runs observability: after each successful PR
+    creation, process_task writes a review_runs row signalling that the
+    inline review path ran. M5 Test 3 Phase B (poll for review_runs.ended_at)
+    relies on this."""
+    _patch_all(monkeypatch)
+
+    orchestrator.process_task(task, cfg, inmem_store)
+
+    import sqlite3
+    rows = inmem_store._conn.execute(
+        "SELECT pr_url, attempts, clean, ended_at FROM review_runs"
+    ).fetchall()
+    assert len(rows) == 1
+    pr_url, attempts, clean, ended_at = rows[0]
+    assert pr_url == task.pr_url
+    assert attempts == 1
+    assert clean == 1
+    assert ended_at is not None
+
+
+def test_process_task_dry_run_does_not_write_review_runs(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
+) -> None:
+    _patch_all(monkeypatch)
+
+    orchestrator.process_task(task, cfg, inmem_store, dry_run=True)
+
+    count = inmem_store._conn.execute(
+        "SELECT COUNT(*) FROM review_runs"
+    ).fetchone()[0]
+    assert count == 0, "dry-run must not write any review_runs rows"
+
+
 def test_read_pr_body_parses_title_and_body_from_markdown(
     tmp_path: Path, tmp_worktree: Path,
 ) -> None:
