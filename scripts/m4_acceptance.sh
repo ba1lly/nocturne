@@ -168,7 +168,7 @@ echo "✓ Daemon shut down cleanly within 30s"
 
 # Wait a bit more and check for zombies
 sleep 5
-ZOMBIES=$(pgrep -f "nocturne daemon" | wc -l)
+ZOMBIES=$(pgrep -cf "nocturne daemon" 2>/dev/null || echo "0")
 if [ "$ZOMBIES" != "0" ]; then
     echo "FAIL: $ZOMBIES zombie daemon(s) remain"
     exit 1
