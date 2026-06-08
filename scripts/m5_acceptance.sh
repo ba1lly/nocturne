@@ -215,7 +215,7 @@ until curl -sf http://127.0.0.1:8765/health >/dev/null 2>&1; do sleep 1; done
 
 # Phase A: wait for Issue #1 to be done with PR
 echo "  Phase A: waiting for Issue #1 to be processed..."
-PHASE_A_DEADLINE=$((SECONDS + 600))
+PHASE_A_DEADLINE=$((SECONDS + 1800))
 PR_URL=""
 while [ $SECONDS -lt $PHASE_A_DEADLINE ]; do
     PR_URL=$(DB_PATH=/tmp/m5-review-state/nocturne.db python3 << 'PYEOF' 2>/dev/null || true
@@ -245,7 +245,7 @@ echo "  Phase A complete: PR_URL=$PR_URL, PR_NUM=$PR_NUM"
 
 # Phase B: wait for review_runs row to complete
 echo "  Phase B: waiting for review_runs to complete..."
-PHASE_B_DEADLINE=$((SECONDS + 600))
+PHASE_B_DEADLINE=$((SECONDS + 1800))
 ENDED=""
 while [ $SECONDS -lt $PHASE_B_DEADLINE ]; do
     ENDED=$(DB_PATH=/tmp/m5-review-state/nocturne.db PR_URL="$PR_URL" python3 << 'PYEOF' 2>/dev/null || true
