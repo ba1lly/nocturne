@@ -94,7 +94,8 @@ echo ""
 echo "=== Step 1: Pre-state Cleanup ==="
 
 # Close any open PRs from prior runs on issues 3 and 5
-gh pr list --repo "$REPO" --search "head:nocturne/issue-" --state open --json url --jq '.[].url' \
+gh pr list --repo "$REPO" --state open --json url,headRefName \
+    --jq '.[] | select(.headRefName | startswith("nocturne/issue-")) | .url' \
     | xargs -r -I{} gh pr close {} --delete-branch 2>/dev/null || true
 echo "✓ Cleaned up any prior nocturne/issue-* PRs"
 
@@ -152,17 +153,16 @@ if [ ! -f "$DB_PATH" ]; then
     exit 1
 fi
 
-STATUS_3=$(python3 << 'PYEOF'
-import sqlite3
+STATUS_3=$(DB_PATH="$DB_PATH" python3 << 'PYEOF'
+import os, sqlite3
 try:
-    db = sqlite3.connect('DBPATH')
+    db = sqlite3.connect(os.environ['DB_PATH'])
     row = db.execute("SELECT status FROM tasks WHERE issue_number=3").fetchone()
     print(row[0] if row else 'absent')
 except Exception as e:
     print(f"error: {e}")
 PYEOF
 )
-STATUS_3="${STATUS_3//DBPATH/$DB_PATH}"
 
 if [ "$STATUS_3" != "parked" ]; then
     echo "FAIL: Issue #3 status is '$STATUS_3', expected 'parked'"
@@ -191,17 +191,16 @@ echo ""
 # ============================================================================
 
 echo "=== Step 5: Assert Issue #5 (literal sentinel) NOT falsely parked ==="
-STATUS_5=$(python3 << 'PYEOF'
-import sqlite3
+STATUS_5=$(DB_PATH="$DB_PATH" python3 << 'PYEOF'
+import os, sqlite3
 try:
-    db = sqlite3.connect('DBPATH')
+    db = sqlite3.connect(os.environ['DB_PATH'])
     row = db.execute("SELECT status FROM tasks WHERE issue_number=5").fetchone()
     print(row[0] if row else 'absent')
 except Exception as e:
     print(f"error: {e}")
 PYEOF
 )
-STATUS_5="${STATUS_5//DBPATH/$DB_PATH}"
 
 case "$STATUS_5" in
     parked)
@@ -265,17 +264,16 @@ DEADLINE=$((SECONDS + 120))
 STATUS=""
 
 while [ $SECONDS -lt $DEADLINE ]; do
-    STATUS=$(python3 << 'PYEOF'
-import sqlite3
+    STATUS=$(DB_PATH="$DB_PATH" python3 << 'PYEOF'
+import os, sqlite3
 try:
-    db = sqlite3.connect('DBPATH')
+    db = sqlite3.connect(os.environ['DB_PATH'])
     row = db.execute("SELECT status FROM tasks WHERE issue_number=3").fetchone()
     print(row[0] if row else 'absent')
 except Exception as e:
     print(f"error: {e}")
 PYEOF
 )
-    STATUS="${STATUS//DBPATH/$DB_PATH}"
     
     if [ "$STATUS" = "done" ]; then
         echo "✓ Issue #3 status transitioned to 'done'"
@@ -302,7 +300,8 @@ echo ""
 # ============================================================================
 
 echo "=== Step 9: Assert PR created for Issue #3 ==="
-PR_COUNT=$(gh pr list --repo "$REPO" --search "head:nocturne/issue-3" --state open --json url --jq 'length')
+PR_COUNT=$(gh pr list --repo "$REPO" --state open --json headRefName \
+    --jq '[.[] | select(.headRefName | startswith("nocturne/issue-3-"))] | length')
 
 if [ "$PR_COUNT" -lt 1 ]; then
     echo "FAIL: no PR for Issue #3 after resume"
@@ -310,11 +309,12 @@ if [ "$PR_COUNT" -lt 1 ]; then
 fi
 echo "✓ Found $PR_COUNT PR(s) for Issue #3"
 
-gh pr list --repo "$REPO" --search "head:nocturne/issue-3" --state open --json url,body \
+gh pr list --repo "$REPO" --state open --json url,headRefName,body \
+    --jq '[.[] | select(.headRefName | startswith("nocturne/issue-3-"))]' \
     > "$EVIDENCE_DIR/milestone-M3-resume.json"
 
-# Extract PR numbers for cleanup
-OPENED_PRS=($(gh pr list --repo "$REPO" --search "head:nocturne/issue-3" --state open --json number --jq '.[].number'))
+OPENED_PRS=($(gh pr list --repo "$REPO" --state open --json number,headRefName \
+    --jq '.[] | select(.headRefName | startswith("nocturne/issue-3-")) | .number'))
 echo ""
 
 # ============================================================================
