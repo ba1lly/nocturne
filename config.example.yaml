@@ -1,0 +1,82 @@
+github:
+  owner: "ba1lly" # REQUIRED — your GitHub username/org; replace before first run
+
+sandbox:
+  repo_name: "nocturne-playground" # default; override if you want a different sandbox name
+  checkout_path: "~/projects/nocturne-playground-checkout"
+
+providers:
+  alibaba-coding-plan:
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    api_key_env: "DASHSCOPE_API_KEY"
+  # anthropic:
+  #   base_url: "https://api.anthropic.com/v1"
+  #   api_key_env: "ANTHROPIC_API_KEY"
+  # openai:
+  #   base_url: "https://api.openai.com/v1"
+  #   api_key_env: "OPENAI_API_KEY"
+  # kimi:
+  #   base_url: "https://api.moonshot.cn/v1"
+  #   api_key_env: "MOONSHOT_API_KEY"
+  # glm:
+  #   base_url: "https://open.bigmodel.cn/api/paas/v4"
+  #   api_key_env: "ZHIPUAI_API_KEY"
+
+models:
+  reasoning: "alibaba-coding-plan/qwen3.6-plus" # full provider/model string
+  report: "alibaba-coding-plan/qwen3.6-plus"
+  coding: "alibaba-coding-plan/qwen3-coder-plus"
+
+opencode:
+  command: "opencode"
+  timeout_min: 25
+  worktree_root: "/tmp/nocturne"
+
+repos:
+  - slug: "ba1lly/nocturne-playground" # GitHub owner/repo for gh + PR URLs
+    checkout_path: "~/projects/nocturne-playground-checkout" # local clone (must contain .git/)
+    label: "agent"
+    base: "main"
+    verify_cmd: "pytest -q"
+    require_new_test: true
+  # - slug: "ba1lly/MEPTools" # DISABLED — promote post-sandbox-acceptance
+  #   checkout_path: "~/projects/MEPTools"
+  #   label: "agent"
+  #   base: "main"
+  #   verify_cmd: "pytest -q"
+  #   require_new_test: true
+
+guardrails:
+  max_attempts: 3
+  per_task_timeout_min: 25
+  global_wallclock_hours: 8
+  token_budget: 2_000_000
+  allow_force_push: false
+  allow_auto_merge: false
+
+discord:
+  enabled: true
+  bot_token_env: "NOCTURNE_DISCORD_TOKEN"
+  channel_id: 0 # REQUIRED — set to your Discord channel ID before running daemon
+  mention_user_id: 0 # REQUIRED — set to your Discord user ID for pings
+
+daemon:
+  poll_interval_sec: 300
+  quiet_hours: []
+
+review:
+  enabled: true
+  budget_attempts: 2
+  severity_floor: "info" # fix EVERY finding — info, low, medium, high, critical
+  skill_name: "reviewer" # name of the SKILL.md to invoke (must be installed via 'nocturne skill install')
+  append_only: true # MUST be true — never force-push
+
+healthcheck:
+  enabled: true
+  bind_host: "127.0.0.1"
+  bind_port: 8765
+  staleness_factor: 2
+
+persona:
+  enabled: true
+  soul_path: "~/.config/nocturne/soul.md" # optional; if file missing, no persona injection. Max 8192 chars; ConfigError on oversize. Manage via 'nocturne soul show/set/edit'.
