@@ -166,7 +166,7 @@ def review_pr(
     # We use subprocess directly (not opencode_driver.run) because the review
     # flow does not use a Task model — it uses the reasoning model on a diff.
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", dir=str(worktree), delete=False
+        mode="w", suffix=".md", dir=None, delete=False
     ) as f:
         f.write(prompt)
         prompt_path = f.name
@@ -279,6 +279,7 @@ def apply_fixes(
     worktree: Path,
     cfg: Config,
     attempt: int = 1,
+    base: str = "main",
 ) -> ApplyFixesResult:
     """Invoke OpenCode to apply fixes for the findings; commit + push (append-only).
 
@@ -291,7 +292,7 @@ def apply_fixes(
     prompt = _render_fix_prompt(findings, pr_url)
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", dir=str(worktree), delete=False,
+        mode="w", suffix=".md", dir=None, delete=False,
     ) as f:
         f.write(prompt)
         prompt_path = f.name
@@ -353,7 +354,7 @@ def apply_fixes(
         f"fix(review): address {len(findings)} reviewer findings [round {attempt}]"
     )
     try:
-        commit_push(worktree, commit_msg)
+        commit_push(worktree, commit_msg, base)
     except Exception as e:
         logger.warning("commit_push raised in apply_fixes: %s", e)
         return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)

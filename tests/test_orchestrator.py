@@ -117,8 +117,8 @@ def _patch_all(
         calls.verify.append((task.id, wt))
         return next(v_iter)
 
-    def fake_commit_push(wt: Path, message: str) -> None:
-        calls.commit_push.append((wt, message))
+    def fake_commit_push(wt: Path, message: str, base: str) -> None:
+        calls.commit_push.append((wt, message, base))
 
     def fake_open_pr(repo: str, branch: str, base: str, title: str, body: str) -> str:
         calls.open_pr.append((repo, branch, base, title, body))

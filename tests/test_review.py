@@ -359,7 +359,7 @@ def _record_commit_push(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     """Replace commit_push with a recording fake."""
     recorded: list[tuple] = []
 
-    def fake_commit_push(wt, message):
+    def fake_commit_push(wt, message, base):
         recorded.append((wt, message))
 
     monkeypatch.setattr(review_mod, "commit_push", fake_commit_push)

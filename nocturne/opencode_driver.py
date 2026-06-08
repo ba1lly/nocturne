@@ -24,12 +24,8 @@ class OpenCodeTimeout(OpenCodeError):
 SENTINEL = "##NOCTURNE_NEED_INPUT##"
 
 
-def render_prompt_to_file(task: Task, cfg: Config, target_dir: Path, prior_failure: str | None = None) -> Path:
-    nocturne_dir = target_dir / ".nocturne"
-    nocturne_dir.mkdir(parents=True, exist_ok=True)
-    prompt_path = nocturne_dir / "prompt.md"
-    _ = prompt_path.write_text(render_task_prompt(task, cfg, prior_failure))
-    return prompt_path.resolve()
+def render_prompt(task: Task, cfg: Config, prior_failure: str | None = None) -> str:
+    return render_task_prompt(task, cfg, prior_failure)
 
 
 def parse_ndjson_line(line: str) -> dict[str, object] | None:
@@ -83,9 +79,8 @@ def has_error_events(events: list[dict[str, object]]) -> list[dict[str, object]]
     return [event for event in events if event.get("type") == "error"]
 
 
-def _build_opencode_args(task: Task, cwd: Path, prompt_path: Path, cfg: Config) -> list[str]:
+def _build_opencode_args(task: Task, cwd: Path, prompt_content: str, cfg: Config) -> list[str]:
     model_string = task.coding_model if task.coding_model else cfg.models.coding
-    prompt_content = prompt_path.read_text(encoding="utf-8")
     return [
         cfg.opencode.command,
         "run",
@@ -107,8 +102,8 @@ def run(
     prior_failure: str | None = None,
     on_pid_started: Callable[[int], None] | None = None,
 ) -> OpenCodeResult:
-    prompt_path = render_prompt_to_file(task, cfg, cwd, prior_failure)
-    args = _build_opencode_args(task, cwd, prompt_path, cfg)
+    prompt_content = render_prompt(task, cfg, prior_failure)
+    args = _build_opencode_args(task, cwd, prompt_content, cfg)
     enforce_no_dangerous_opencode_flags(args)
 
     model_string = task.coding_model if task.coding_model else cfg.models.coding

@@ -33,7 +33,7 @@ from nocturne.opencode_driver import (
     has_error_events,
     parse_ndjson_line,
     parse_ndjson_stream,
-    render_prompt_to_file,
+    render_prompt,
     run,
 )
 
@@ -119,12 +119,18 @@ def patch_popen(monkeypatch: pytest.MonkeyPatch, proc: FakeProc) -> dict[str, An
     return captured
 
 
-def test_render_prompt_to_file_writes_prompt_with_issue_title(task: Task, cfg: Config, tmp_path: Path) -> None:
-    path = render_prompt_to_file(task, cfg, tmp_path)
+def test_render_prompt_returns_rendered_string_with_issue_title(task: Task, cfg: Config) -> None:
+    content = render_prompt(task, cfg)
 
-    assert path == (tmp_path / ".nocturne" / "prompt.md").resolve()
-    assert path.is_file()
-    assert "Implement driver test title" in path.read_text()
+    assert isinstance(content, str)
+    assert "Implement driver test title" in content
+
+
+def test_render_prompt_does_not_write_anything_to_worktree(task: Task, cfg: Config, tmp_path: Path) -> None:
+    before = set(tmp_path.rglob("*"))
+    _ = render_prompt(task, cfg)
+    after = set(tmp_path.rglob("*"))
+    assert before == after, "render_prompt must not touch the worktree"
 
 
 @pytest.mark.parametrize("line", ["", "   ", "not json", "{bad"])
@@ -182,9 +188,7 @@ def test_has_error_events_returns_empty_list_when_absent() -> None:
 
 
 def test_build_opencode_args_uses_config_model_when_task_model_empty(task: Task, cfg: Config, tmp_path: Path) -> None:
-    prompt_path = tmp_path / "prompt.md"
-    prompt_path.write_text("test prompt content", encoding="utf-8")
-    args = _build_opencode_args(task, tmp_path, prompt_path, cfg)
+    args = _build_opencode_args(task, tmp_path, "test prompt content", cfg)
 
     assert args[args.index("--model") + 1] == cfg.models.coding
     assert args[-1] == "test prompt content"
@@ -193,9 +197,7 @@ def test_build_opencode_args_uses_config_model_when_task_model_empty(task: Task,
 
 def test_build_opencode_args_uses_task_model_when_set(task: Task, cfg: Config, tmp_path: Path) -> None:
     task.coding_model = "alibaba-coding-plan/custom-coder"
-    prompt_path = tmp_path / "prompt.md"
-    prompt_path.write_text("test", encoding="utf-8")
-    args = _build_opencode_args(task, tmp_path, prompt_path, cfg)
+    args = _build_opencode_args(task, tmp_path, "test", cfg)
 
     assert args[args.index("--model") + 1] == "alibaba-coding-plan/custom-coder"
 

@@ -108,16 +108,24 @@ def test_make_worktree_cleans_stale_path(tmp_worktree: Path, tmp_path: Path) -> 
 # -----------------------------
 
 
+def _seed_origin_ref(repo: Path, base: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), "update-ref", f"refs/remotes/origin/{base}", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_commit_push_uses_nocturne_identity_and_calls_guardrail(
     tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _seed_origin_ref(tmp_worktree, "main")
     wt_path = tmp_path / "wt-commit"
     make_worktree(tmp_worktree, "nocturne/issue-3-1", "main", wt_path)
 
-    # Create a real file change so commit isn't empty
     (wt_path / "file.txt").write_text("hello", encoding="utf-8")
 
-    # Stub out push (we can't push to a real remote here); record guardrail invocation
     guard_mock = MagicMock()
     monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", guard_mock)
 
@@ -130,9 +138,8 @@ def test_commit_push_uses_nocturne_identity_and_calls_guardrail(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    commit_push(wt_path, "feat: test commit")
+    commit_push(wt_path, "feat: test commit", "main")
 
-    # Guardrail must have been invoked exactly once, with the push argv
     assert guard_mock.call_count == 1
     pushed_args = guard_mock.call_args.args[0]
     assert pushed_args[:3] == ["git", "-C", str(wt_path)]
@@ -140,7 +147,6 @@ def test_commit_push_uses_nocturne_identity_and_calls_guardrail(
     assert "--force" not in pushed_args
     assert "-f" not in pushed_args
 
-    # Inspect the actual commit author/committer in the worktree
     log = real_run(
         ["git", "-C", str(wt_path), "log", "-1", "--pretty=%an <%ae>|%cn <%ce>"],
         check=True,
@@ -152,10 +158,75 @@ def test_commit_push_uses_nocturne_identity_and_calls_guardrail(
     assert committer == "Nocturne <nocturne@noreply.localhost>"
 
 
+def test_commit_push_squashes_opencode_self_commits_under_nocturne_identity(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_origin_ref(tmp_worktree, "main")
+    wt_path = tmp_path / "wt-squash"
+    make_worktree(tmp_worktree, "nocturne/issue-5-1", "main", wt_path)
+
+    (wt_path / "a.txt").write_text("from opencode", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(wt_path), "-c", "user.name=Alice", "-c", "user.email=alice@example.com",
+         "add", "a.txt"],
+        check=True, capture_output=True, text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(wt_path), "-c", "user.name=Alice", "-c", "user.email=alice@example.com",
+         "commit", "-m", "opencode: did the thing"],
+        check=True, capture_output=True, text=True,
+    )
+
+    (wt_path / "b.txt").write_text("from opencode 2", encoding="utf-8")
+
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", MagicMock())
+    real_run = subprocess.run
+
+    def fake_run(args, *a, **kw):
+        if isinstance(args, (list, tuple)) and "push" in list(args):
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    commit_push(wt_path, "closes #5: nocturne does the thing", "main")
+
+    count = real_run(
+        ["git", "-C", str(wt_path), "rev-list", "--count", "origin/main..HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert count == "1", f"expected exactly 1 commit ahead of origin/main, got {count}"
+
+    log = real_run(
+        ["git", "-C", str(wt_path), "log", "-1", "--pretty=%an <%ae>|%cn <%ce>|%s"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    author, committer, subject = log.split("|")
+    assert author == "Nocturne <nocturne@noreply.localhost>"
+    assert committer == "Nocturne <nocturne@noreply.localhost>"
+    assert subject == "closes #5: nocturne does the thing"
+
+    assert (wt_path / "a.txt").exists()
+    assert (wt_path / "b.txt").exists()
+
+
+def test_commit_push_raises_when_no_changes_after_reset(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_origin_ref(tmp_worktree, "main")
+    wt_path = tmp_path / "wt-empty"
+    make_worktree(tmp_worktree, "nocturne/issue-6-1", "main", wt_path)
+
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", MagicMock())
+
+    with pytest.raises(GitworkError, match="no changes to commit"):
+        commit_push(wt_path, "closes #6: nothing", "main")
+
+
 def test_commit_push_guardrail_blocks_force(
     tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the guardrail raises, commit_push must propagate (no subprocess push call)."""
+    _seed_origin_ref(tmp_worktree, "main")
     wt_path = tmp_path / "wt-force"
     make_worktree(tmp_worktree, "nocturne/issue-4-1", "main", wt_path)
     (wt_path / "file.txt").write_text("x", encoding="utf-8")
@@ -177,7 +248,7 @@ def test_commit_push_guardrail_blocks_force(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(GuardrailViolation):
-        commit_push(wt_path, "feat: should fail")
+        commit_push(wt_path, "feat: should fail", "main")
 
     assert push_called["n"] == 0, "push must NOT run if guardrail raises"
 

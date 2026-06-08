@@ -141,8 +141,12 @@ def test_prior_failure_none_omits_failure_block() -> None:
 
 def test_forbidden_actions_section_interpolates_branch() -> None:
     out = render_task_prompt(make_task(branch="nocturne/issue-7-branch"), make_config())
-    assert "Never run `git push --force`" in out
-    assert "Stay on branch `nocturne/issue-7-branch`." in out
+    assert "Do NOT run `git commit`" in out
+    assert "`git push`" in out
+    assert "`gh pr`" in out
+    assert "the orchestrator handles staging, committing" in out
+    assert "You are on branch `nocturne/issue-7-branch`" in out
+    assert "do not switch branches or modify `main`" in out
 
 
 def test_soul_cache_uses_mtime_and_skips_second_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

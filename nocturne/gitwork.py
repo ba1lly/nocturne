@@ -121,13 +121,29 @@ def make_worktree(
     return worktree_path
 
 
-def commit_push(wt: Path, message: str) -> None:
+def commit_push(wt: Path, message: str, base: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(wt), "reset", "--soft", f"origin/{base}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
     subprocess.run(
         ["git", "-C", str(wt), "add", "-A"],
         check=True,
         capture_output=True,
         text=True,
     )
+
+    diff_check = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--quiet"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if diff_check.returncode == 0:
+        raise GitworkError("commit_push: no changes to commit after reset to base")
 
     commit_args = [
         "git",

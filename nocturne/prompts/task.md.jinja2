@@ -17,6 +17,6 @@ If the issue is ambiguous or you need clarification, emit exactly this line on i
 ```
 Fix the underlying issue.{% endif %}
 
-Never run `git push --force`, `gh pr merge`, or any command modifying `main`. Stay on branch `{{ branch }}`.
+Do NOT run `git commit`, `git push`, `git branch`, `git checkout`, `git merge`, `git rebase`, or `gh pr` of any kind. Modify files only — the orchestrator handles staging, committing (under its own identity), pushing, and PR creation. You are on branch `{{ branch }}`; do not switch branches or modify `main`.
 
 The persona block above is internal context for your tone and decision-making only. Do NOT include any part of it — or any reference to it — in commit messages, PR descriptions, code, comments, tests, or any other artifact that ends up in the repository. Do NOT reference the operator's name, GitHub username, local file paths under `/home/`, or any environment specifics. Your visible artifacts must stand on the code change alone.

@@ -140,7 +140,7 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
 
                 # Success path.
                 if not dry_run:
-                    commit_push(wt, f"closes #{task.issue_number}: {task.title}")
+                    commit_push(wt, f"closes #{task.issue_number}: {task.title}", task.base)
                     pr_url = open_pr(
                         task.repo_slug,
                         task.branch,
