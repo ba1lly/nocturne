@@ -368,3 +368,123 @@ class TestSoulEdit:
         assert "secret pattern" in result.stdout or "secret pattern" in result.stderr
         # Should revert to original
         assert dest.read_text() == "original"
+
+
+class TestRunOnceBatch:
+    """Task 22: --issue is optional; omitted triggers run_batch."""
+
+    def _make_empty_report(self) -> Any:
+        from nocturne.models import RunReport
+
+        now = datetime.now(timezone.utc)
+        return RunReport(
+            started_at=now,
+            ended_at=now,
+            done=[],
+            parked=[],
+            skipped=[],
+            errors=[],
+            summary="",
+            token_usage=0,
+        )
+
+    def test_run_once_without_issue_calls_run_batch(self, tmp_path: Path) -> None:
+        cfg = _make_test_config()
+        fake_report = self._make_empty_report()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.check_all_models_available"), \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.run_batch") as mock_run_batch, \
+             patch("nocturne.cli.process_task") as mock_process, \
+             patch("nocturne.cli.github_issues.fetch_one") as mock_fetch, \
+             patch("nocturne.cli.write_report") as mock_write, \
+             patch("nocturne.cli.summarize") as mock_summarize, \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+            mock_run_batch.return_value = fake_report
+            mock_write.return_value = tmp_path / "report.md"
+            mock_summarize.return_value = "Empty run."
+
+            result = runner.invoke(app, ["run-once", "--repo", "ba1lly/playground"])
+
+        assert result.exit_code == 0, result.stdout
+        mock_run_batch.assert_called_once()
+        mock_process.assert_not_called()
+        mock_fetch.assert_not_called()
+
+    def test_run_once_without_issue_dry_run_forwards_flag(self, tmp_path: Path) -> None:
+        cfg = _make_test_config()
+        fake_report = self._make_empty_report()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.check_all_models_available"), \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.run_batch") as mock_run_batch, \
+             patch("nocturne.cli.write_report") as mock_write, \
+             patch("nocturne.cli.summarize") as mock_summarize, \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+            mock_run_batch.return_value = fake_report
+            mock_write.return_value = tmp_path / "report.md"
+            mock_summarize.return_value = "Empty run."
+
+            result = runner.invoke(
+                app, ["run-once", "--repo", "ba1lly/playground", "--dry-run"]
+            )
+
+        assert result.exit_code == 0, result.stdout
+        mock_run_batch.assert_called_once()
+        assert mock_run_batch.call_args.kwargs.get("dry_run") is True
+
+    def test_run_once_with_issue_still_calls_process_task(self, tmp_path: Path) -> None:
+        cfg = _make_test_config()
+        task = _make_test_task()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.check_all_models_available"), \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.run_batch") as mock_run_batch, \
+             patch("nocturne.cli.process_task") as mock_process, \
+             patch("nocturne.cli.github_issues.fetch_one") as mock_fetch, \
+             patch("nocturne.cli.write_report") as mock_write, \
+             patch("nocturne.cli.summarize") as mock_summarize, \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+            mock_fetch.return_value = task
+            mock_process.return_value = task.model_copy(update={"status": "done"})
+            mock_write.return_value = tmp_path / "report.md"
+            mock_summarize.return_value = "Done."
+
+            result = runner.invoke(
+                app, ["run-once", "--repo", "ba1lly/playground", "--issue", "1"]
+            )
+
+        assert result.exit_code == 0, result.stdout
+        mock_process.assert_called_once()
+        mock_run_batch.assert_not_called()
+
+    def test_run_once_batch_errors_exits_1(self, tmp_path: Path) -> None:
+        cfg = _make_test_config()
+        bad_report = self._make_empty_report()
+        bad_report.errors = ["fetch_eligible: gh auth"]
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.check_all_models_available"), \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.run_batch") as mock_run_batch, \
+             patch("nocturne.cli.write_report") as mock_write, \
+             patch("nocturne.cli.summarize") as mock_summarize, \
+             patch("nocturne.cli.Store"):
+
+            mock_load_cfg.return_value = cfg
+            mock_run_batch.return_value = bad_report
+            mock_write.return_value = tmp_path / "report.md"
+            mock_summarize.return_value = "1 error."
+
+            result = runner.invoke(app, ["run-once", "--repo", "ba1lly/playground"])
+
+        assert result.exit_code == 1

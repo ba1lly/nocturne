@@ -399,3 +399,245 @@ def test_worktree_path_includes_issue_and_attempt(monkeypatch: pytest.MonkeyPatc
     (_, _, _, wt_path) = calls.make_worktree[0]
     assert "ba1lly__nocturne-playground" in str(wt_path)
     assert f"issue-{task.issue_number}-1" in str(wt_path)
+
+
+# --------------------------------------------------------------------------------------
+# run_batch tests (Task 22)
+# --------------------------------------------------------------------------------------
+
+
+def _make_triage_result(task: Task, outcome: str, priority: int, reason: str = "") -> Any:
+    from nocturne.models import TriageOutcome, TriageResult
+
+    return TriageResult(
+        task_id=task.id,
+        doable=(outcome == "DOABLE"),
+        outcome=TriageOutcome(outcome),
+        priority=priority,
+        reason=reason or f"{outcome} reason",
+    )
+
+
+def _make_done_task(input_task: Task) -> Task:
+    return input_task.model_copy(
+        update={"status": "done", "pr_url": "https://github.com/x/y/pull/1"}
+    )
+
+
+def test_run_batch_dispatches_doable_to_process_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1")
+    t1 = t1.model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2")
+    t2 = t2.model_copy(update={"issue_number": 2})
+    t3 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3")
+    t3 = t3.model_copy(update={"issue_number": 3})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2, t3])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t1, _make_triage_result(t1, "DOABLE", 80)),
+            (t3, _make_triage_result(t3, "NEED_INPUT", 40, "what API?")),
+            (t2, _make_triage_result(t2, "SKIP", 0, "too vague")),
+        ],
+    )
+
+    process_calls: list[Task] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        process_calls.append(task)
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(process_calls) == 1
+    assert process_calls[0].id == t1.id
+    assert len(report.done) == 1
+    assert report.done[0].id == t1.id
+    assert len(report.skipped) == 1
+    assert report.skipped[0] == (2, "too vague")
+    assert len(report.parked) == 1
+    assert report.parked[0].id == t3.id
+    assert report.parked[0].question == "what API?"
+    assert report.errors == []
+
+
+def test_run_batch_skip_not_passed_to_process_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#10").model_copy(update={"issue_number": 10})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#11").model_copy(update={"issue_number": 11})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t1, _make_triage_result(t1, "SKIP", 0, "out of scope")),
+            (t2, _make_triage_result(t2, "SKIP", 0, "design needed")),
+        ],
+    )
+
+    process_calls: list[Task] = []
+    monkeypatch.setattr(
+        "nocturne.orchestrator.process_task",
+        lambda task, c, store, *, dry_run=False: (process_calls.append(task), task)[1],
+    )
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert process_calls == []
+    assert len(report.skipped) == 2
+    assert {entry[0] for entry in report.skipped} == {10, 11}
+    assert report.done == []
+    assert report.parked == []
+
+
+def test_run_batch_ordering_respected(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2").model_copy(update={"issue_number": 2})
+    t3 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2, t3])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t2, _make_triage_result(t2, "DOABLE", 90)),
+            (t3, _make_triage_result(t3, "DOABLE", 50)),
+            (t1, _make_triage_result(t1, "SKIP", 0)),
+        ],
+    )
+
+    process_calls: list[Task] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        process_calls.append(task)
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(process_calls) == 2
+    assert process_calls[0].id == t2.id
+    assert process_calls[1].id == t3.id
+
+
+def test_run_batch_wallclock_aborts_batch(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    cfg.guardrails.global_wallclock_hours = 0
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2").model_copy(update={"issue_number": 2})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t1, _make_triage_result(t1, "DOABLE", 80)),
+            (t2, _make_triage_result(t2, "DOABLE", 70)),
+        ],
+    )
+
+    def fake_check_wallclock(started_at, c):
+        raise GuardrailViolation("wallclock exhausted")
+
+    monkeypatch.setattr("nocturne.orchestrator.check_wallclock", fake_check_wallclock)
+
+    process_calls: list[Task] = []
+    monkeypatch.setattr(
+        "nocturne.orchestrator.process_task",
+        lambda task, c, store, *, dry_run=False: (process_calls.append(task), task)[1],
+    )
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert process_calls == []
+    assert any("wallclock" in e for e in report.errors)
+
+
+def test_run_batch_fetch_failure_returns_empty_report(
+    monkeypatch: pytest.MonkeyPatch, cfg: Config, inmem_store: Store
+) -> None:
+    from nocturne.sources.github_issues import GhError
+
+    def boom(repo_cfg):
+        raise GhError("gh CLI not authenticated")
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", boom)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert report.done == []
+    assert report.parked == []
+    assert report.skipped == []
+    assert len(report.errors) == 1
+    assert "fetch_eligible" in report.errors[0]
+
+
+def test_run_batch_individual_task_failure_continues_batch(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2").model_copy(update={"issue_number": 2})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t1, _make_triage_result(t1, "DOABLE", 90)),
+            (t2, _make_triage_result(t2, "DOABLE", 80)),
+        ],
+    )
+
+    process_calls: list[Task] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        process_calls.append(task)
+        if task.id == t1.id:
+            raise RuntimeError("disk full")
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(process_calls) == 2
+    assert len(report.done) == 1
+    assert report.done[0].id == t2.id
+    assert len(report.errors) == 1
+    assert t1.id in report.errors[0]
+    assert "RuntimeError" in report.errors[0]
+
+
+def test_run_batch_dry_run_forwards_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [(t1, _make_triage_result(t1, "DOABLE", 80))],
+    )
+
+    captured_kwargs: list[dict[str, Any]] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        captured_kwargs.append({"dry_run": dry_run})
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    orchestrator.run_batch(cfg.repos[0], cfg, inmem_store, dry_run=True)
+
+    assert captured_kwargs == [{"dry_run": True}]

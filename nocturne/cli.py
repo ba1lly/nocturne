@@ -19,7 +19,7 @@ from nocturne.reporter import summarize, write_report
 from nocturne.sources import github_issues
 from nocturne.store import Store
 from nocturne.models import RunReport
-from nocturne.orchestrator import process_task
+from nocturne.orchestrator import process_task, run_batch
 
 log = get_logger("nocturne.cli")
 
@@ -88,14 +88,17 @@ def _setup_runtime(cfg: Config, state_dir: Path) -> None:
 @app.command(name="run-once")
 def run_once(
     repo: str = typer.Option(..., "--repo", help="Repository slug (owner/repo)"),
-    issue: int = typer.Option(..., "--issue", help="Issue number"),
+    issue: int | None = typer.Option(
+        None,
+        "--issue",
+        help="Issue number. Omit to batch-process all eligible issues in --repo.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Skip push and PR creation"),
 ) -> None:
-    """Process a single issue."""
+    """Process a single issue, or all eligible issues when --issue is omitted."""
     cfg = _load_cfg(_state.config)
     _setup_runtime(cfg, _state.state_dir)
 
-    # Find matching repo config
     repo_cfg = None
     for r in cfg.repos:
         if r.slug == repo:
@@ -106,27 +109,35 @@ def run_once(
         typer.secho(f"repo not in allowlist: {repo}", fg="red", err=True)
         raise typer.Exit(2)
 
-    # Setup store
     _state.state_dir.mkdir(parents=True, exist_ok=True)
     store = Store(_state.state_dir / "nocturne.db")
 
-    # Fetch task
+    if dry_run:
+        log.info("Would process task; pushing and PR creation disabled.")
+
+    if issue is None:
+        report = run_batch(repo_cfg, cfg, store, dry_run=dry_run)
+        report.summary = summarize(report, cfg)
+        report_path = write_report(report, _state.state_dir / "reports")
+        typer.echo(
+            f"Batch done. {len(report.done)} done, {len(report.parked)} parked, "
+            f"{len(report.skipped)} skipped, {len(report.errors)} errors. Report: {report_path}"
+        )
+        if len(report.errors) == 0:
+            raise typer.Exit(0)
+        else:
+            raise typer.Exit(1)
+
     try:
         task = github_issues.fetch_one(repo, issue, repo_cfg)
     except github_issues.GhError as e:
         typer.secho(f"github error: {e}", fg="red", err=True)
         raise typer.Exit(2)
 
-    # Insert task so orchestrator updates don't fail
     store.insert_task(task)
 
-    if dry_run:
-        log.info("Would process task; pushing and PR creation disabled.")
-
-    # Process task
     result_task = process_task(task, cfg, store, dry_run=dry_run)
 
-    # Build report
     now = datetime.now(timezone.utc)
     report = RunReport(
         started_at=now,
@@ -139,10 +150,8 @@ def run_once(
         token_usage=0,
     )
 
-    # Populate summary
     report.summary = summarize(report, cfg)
 
-    # Write report
     report_path = write_report(report, _state.state_dir / "reports")
 
     typer.echo(f"Done. Status: {result_task.status}. Report: {report_path}")

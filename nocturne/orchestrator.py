@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from nocturne import gitwork, opencode_driver, verifier
 from nocturne._logging import get_logger
-from nocturne.config import Config
-from nocturne.guardrails import GuardrailViolation, WorktreeContext, check_repo_allowed
+from nocturne.config import Config, RepoConfig
+from nocturne.guardrails import (
+    GuardrailViolation,
+    WorktreeContext,
+    check_repo_allowed,
+    check_wallclock,
+)
 from nocturne.gitwork import branch_name, commit_push, make_worktree, open_pr
-from nocturne.models import OpenCodeResult, Task
+from nocturne.models import OpenCodeResult, ParkedTask, RunReport, Task, TriageResult
+from nocturne.sources.github_issues import fetch_eligible
+from nocturne.store import Store
+from nocturne.triage import triage_batch
 
 
 class OrchestratorError(Exception):
@@ -146,3 +155,128 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
         # else: retain worktree for debugging (default behavior).
 
     return task
+
+
+def _dispatch_triaged(
+    task: Task,
+    tr: TriageResult,
+    cfg: Config,
+    store: Store,
+    *,
+    dry_run: bool = False,
+) -> str:
+    """Dispatch a triaged task to the right pipeline.
+
+    Returns one of: 'done', 'failed', 'parked', 'skipped'.
+    SKIP and NEED_INPUT MUST NOT invoke process_task (plan invariant).
+    """
+    if tr.outcome == "SKIP":
+        return "skipped"
+    if tr.outcome == "NEED_INPUT":
+        # M3 (Task 25) will wire askflow.park_task — in M2 we record parked status only.
+        store.insert_task(task)
+        store.update_status(task.id, "parked")
+        return "parked"
+    store.insert_task(task)
+    result_task = process_task(task, cfg, store, dry_run=dry_run)
+    return result_task.status
+
+
+def run_batch(
+    repo_cfg: RepoConfig,
+    cfg: Config,
+    store: Store,
+    *,
+    dry_run: bool = False,
+) -> RunReport:
+    """Fetch eligible issues, triage, and process each per outcome.
+
+    Returns an aggregate RunReport. Never raises on individual task failures —
+    all errors are collected into `RunReport.errors`. Wallclock guard is
+    checked between tasks; a violation aborts the remainder of the batch.
+    """
+    log = get_logger("nocturne.orchestrator")
+    started_at = datetime.now(timezone.utc)
+    done: list[Task] = []
+    parked: list[ParkedTask] = []
+    skipped: list[tuple[int, str]] = []
+    errors: list[str] = []
+
+    try:
+        issues = fetch_eligible(repo_cfg)
+    except Exception as e:
+        log.error("fetch_eligible failed: %s", e)
+        errors.append(f"fetch_eligible: {e}")
+        ended_at = datetime.now(timezone.utc)
+        return RunReport(
+            started_at=started_at,
+            ended_at=ended_at,
+            done=[],
+            parked=[],
+            skipped=[],
+            errors=errors,
+            summary="",
+            token_usage=0,
+        )
+
+    log.info("fetched %s eligible issues from %s", len(issues), repo_cfg.slug)
+
+    try:
+        triaged = triage_batch(issues, cfg)
+    except Exception as e:
+        log.error("triage_batch failed: %s", e)
+        errors.append(f"triage_batch: {e}")
+        ended_at = datetime.now(timezone.utc)
+        return RunReport(
+            started_at=started_at,
+            ended_at=ended_at,
+            done=[],
+            parked=[],
+            skipped=[],
+            errors=errors,
+            summary="",
+            token_usage=0,
+        )
+
+    for task, tr in triaged:
+        try:
+            check_wallclock(started_at, cfg)
+        except GuardrailViolation as ge:
+            log.warning("wallclock guard fired mid-batch: %s", ge)
+            errors.append(f"wallclock budget exhausted: {ge}")
+            break
+
+        try:
+            status = _dispatch_triaged(task, tr, cfg, store, dry_run=dry_run)
+        except Exception as e:
+            log.error("task %s raised: %s", task.id, e)
+            errors.append(f"{task.id}: {type(e).__name__}: {e}")
+            continue
+
+        if status == "done":
+            done.append(store.get_task(task.id) or task)
+        elif status == "parked":
+            base = task.model_dump()
+            base.pop("question", None)
+            parked.append(
+                ParkedTask(
+                    **base,
+                    question=tr.reason or "Triage classified as NEED_INPUT — clarification required.",
+                    parked_at=datetime.now(timezone.utc),
+                )
+            )
+        elif status == "skipped":
+            skipped.append((task.issue_number, tr.reason))
+        # status == "failed": leave row in store with status=failed; nothing added to done.
+
+    ended_at = datetime.now(timezone.utc)
+    return RunReport(
+        started_at=started_at,
+        ended_at=ended_at,
+        done=done,
+        parked=parked,
+        skipped=skipped,
+        errors=errors,
+        summary="",
+        token_usage=0,
+    )
