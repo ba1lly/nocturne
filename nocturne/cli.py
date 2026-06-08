@@ -170,8 +170,152 @@ def version() -> None:
 
 @app.command()
 def status() -> None:
-    """Show status (not implemented in M1)."""
-    typer.echo("(not implemented in M1)")
+    """Show daemon and task queue status."""
+    cfg = _load_cfg(_state.config)
+    _state.state_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(_state.state_dir / "nocturne.db")
+
+    # Count tasks by status
+    statuses = ["selected", "running", "done", "parked", "skipped", "failed", "aborted"]
+    counts = {}
+    for s in statuses:
+        try:
+            counts[s] = len(store.list_by_status(s))
+        except Exception:
+            counts[s] = 0
+
+    # Get daemon paused flag
+    try:
+        paused_flag = store.get_daemon_flag("paused")
+        paused = paused_flag == "1"
+    except Exception:
+        paused = False
+
+    # Recent PRs: query tasks with pr_url not null, ordered by updated_at desc, limit 5
+    recent_prs = []
+    try:
+        rows = store._conn.execute(
+            "SELECT id, issue_number, title, pr_url, updated_at FROM tasks "
+            "WHERE pr_url IS NOT NULL AND pr_url != '' "
+            "ORDER BY updated_at DESC LIMIT 5"
+        ).fetchall()
+        recent_prs = [
+            {"id": r[0], "issue_number": r[1], "title": r[2], "pr_url": r[3], "updated_at": r[4]}
+            for r in rows
+        ]
+    except Exception:
+        pass
+
+    # Parked tasks: list with task_id and question
+    parked_list = []
+    try:
+        for t in store.list_by_status("parked"):
+            parked_list.append({
+                "id": t.id, "issue_number": t.issue_number,
+                "question": (t.question or "")[:80],
+            })
+    except Exception:
+        pass
+
+    # Print using rich Table
+    from rich.console import Console
+    from rich.table import Table
+    console = Console()
+
+    # Header
+    console.print(f"\n[bold]Nocturne Status[/bold] (paused: {'yes' if paused else 'no'})\n")
+
+    # Counts table
+    counts_table = Table(title="Tasks by Status")
+    counts_table.add_column("Status", style="cyan")
+    counts_table.add_column("Count", style="green", justify="right")
+    for s in statuses:
+        counts_table.add_row(s, str(counts[s]))
+    console.print(counts_table)
+
+    # Parked
+    if parked_list:
+        parked_table = Table(title=f"Parked ({len(parked_list)})")
+        parked_table.add_column("Task ID", style="yellow")
+        parked_table.add_column("Issue", style="green")
+        parked_table.add_column("Question", style="white")
+        for p in parked_list:
+            parked_table.add_row(p["id"], f"#{p['issue_number']}", p["question"])
+        console.print(parked_table)
+
+    # Recent PRs
+    if recent_prs:
+        pr_table = Table(title="Recent PRs (last 5)")
+        pr_table.add_column("Issue", style="green")
+        pr_table.add_column("Title", style="white")
+        pr_table.add_column("PR URL", style="cyan")
+        for pr in recent_prs:
+            title = (pr["title"] or "")[:40]
+            pr_table.add_row(f"#{pr['issue_number']}", title, pr["pr_url"])
+        console.print(pr_table)
+
+
+@app.command()
+def daemon(
+    once: bool = typer.Option(False, "--once", help="Run one poll cycle then exit (for testing)"),
+) -> None:
+    """Run the Nocturne daemon (continuous poll loop)."""
+    cfg = _load_cfg(_state.config)
+    _state.state_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(_state.state_dir, "INFO" if not _state.verbose else "DEBUG")
+
+    try:
+        check_all_models_available(cfg)
+    except ProviderNotRegistered as e:
+        typer.secho(f"ERROR: model availability check failed: {e}", fg="red", err=True)
+        raise typer.Exit(2)
+
+    store = Store(_state.state_dir / "nocturne.db")
+
+    from nocturne.daemon_recovery import reconcile
+    try:
+        summary = reconcile(cfg, store)
+        typer.echo(f"Startup recovery: {summary}")
+    except Exception as e:
+        typer.secho(f"WARNING: reconcile failed (continuing): {e}", fg="yellow", err=True)
+
+    if once:
+        import asyncio
+        from nocturne.daemon import Daemon
+        d = Daemon(cfg, store, bot=None)
+        result = asyncio.run(d.run_one_cycle())
+        typer.echo(f"One cycle complete: {result}")
+        return
+
+    from nocturne.daemon import run_daemon
+    try:
+        run_daemon(cfg, store)
+    except KeyboardInterrupt:
+        typer.echo("Daemon stopped (KeyboardInterrupt).")
+
+
+@app.command()
+def pause() -> None:
+    """Pause the running daemon (cross-process via SQLite flag)."""
+    cfg = _load_cfg(_state.config)
+    _state.state_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(_state.state_dir / "nocturne.db")
+    store.set_daemon_flag("paused", "1")
+    typer.echo("Daemon pause flag set (running daemon will honor within 1 poll cycle).")
+
+
+@app.command()
+def unpause() -> None:
+    """Unpause the daemon (cross-process via SQLite flag).
+
+    Named 'unpause' (NOT 'resume') to avoid collision with `nocturne resume --task-id ...`
+    which is for parked-task resume.
+    """
+    cfg = _load_cfg(_state.config)
+    _state.state_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(_state.state_dir / "nocturne.db")
+    store.set_daemon_flag("paused", "0")
+    typer.echo("Daemon unpause flag set (running daemon will resume within 1 poll cycle).")
 
 
 # Soul subcommand group

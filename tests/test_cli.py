@@ -693,3 +693,153 @@ class TestResume:
 
         assert result.exit_code == 2
         assert "cannot be empty" in result.stdout or "cannot be empty" in result.stderr
+
+
+class TestDaemon:
+    """Test daemon command."""
+
+    def test_daemon_help_shows_once_flag(self) -> None:
+        """Test daemon --help shows --once flag."""
+        result = runner.invoke(app, ["daemon", "--help"])
+        assert result.exit_code == 0
+        assert "--once" in result.stdout
+
+    def test_daemon_once_calls_run_one_cycle(self, tmp_path: Path) -> None:
+        """Test daemon --once calls run_one_cycle and exits."""
+        from unittest.mock import AsyncMock
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.setup_logging"), \
+             patch("nocturne.cli.check_all_models_available"), \
+             patch("nocturne.cli.Store") as mock_store_class, \
+             patch("nocturne.daemon.Daemon") as mock_daemon_class, \
+             patch("nocturne.daemon_recovery.reconcile") as mock_reconcile:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store_class.return_value = mock_store
+            mock_reconcile.return_value = {}
+
+            mock_daemon = MagicMock()
+            mock_daemon.run_one_cycle = AsyncMock(return_value={"fetched": 0})
+            mock_daemon_class.return_value = mock_daemon
+
+            result = runner.invoke(app, ["daemon", "--once"])
+
+            assert result.exit_code == 0
+            mock_daemon.run_one_cycle.assert_called_once()
+            assert "One cycle complete" in result.stdout
+
+
+class TestStatus:
+    """Test status command (real implementation)."""
+
+    def test_status_empty_db(self, tmp_path: Path) -> None:
+        """Test status with empty DB."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.list_by_status.return_value = []
+            mock_store.get_daemon_flag.return_value = None
+            mock_store._conn.execute.return_value.fetchall.return_value = []
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["status"])
+
+            assert result.exit_code == 0
+            assert "Tasks by Status" in result.stdout
+
+    def test_status_with_parked_task(self, tmp_path: Path) -> None:
+        """Test status shows parked tasks."""
+        cfg = _make_test_config()
+        parked_task = _make_test_task()
+        parked_task.status = "parked"
+        parked_task.question = "What should I do?"
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+
+            def list_by_status_side_effect(status: str) -> list:
+                if status == "parked":
+                    return [parked_task]
+                return []
+
+            mock_store.list_by_status.side_effect = list_by_status_side_effect
+            mock_store.get_daemon_flag.return_value = None
+            mock_store._conn.execute.return_value.fetchall.return_value = []
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["status"])
+
+            assert result.exit_code == 0
+            assert "Parked" in result.stdout
+            assert "What should I do?" in result.stdout
+
+    def test_status_shows_paused_flag(self, tmp_path: Path) -> None:
+        """Test status shows paused flag."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store.list_by_status.return_value = []
+            mock_store.get_daemon_flag.return_value = "1"
+            mock_store._conn.execute.return_value.fetchall.return_value = []
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["status"])
+
+            assert result.exit_code == 0
+            assert "paused: yes" in result.stdout
+
+
+class TestPause:
+    """Test pause command."""
+
+    def test_pause_sets_flag(self, tmp_path: Path) -> None:
+        """Test pause sets the paused flag."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["pause"])
+
+            assert result.exit_code == 0
+            mock_store.set_daemon_flag.assert_called_once_with("paused", "1")
+            assert "pause flag set" in result.stdout
+
+
+class TestUnpause:
+    """Test unpause command."""
+
+    def test_unpause_clears_flag(self, tmp_path: Path) -> None:
+        """Test unpause clears the paused flag."""
+        cfg = _make_test_config()
+
+        with patch("nocturne.cli._load_cfg") as mock_load_cfg, \
+             patch("nocturne.cli.Store") as mock_store_class:
+
+            mock_load_cfg.return_value = cfg
+            mock_store = MagicMock()
+            mock_store_class.return_value = mock_store
+
+            result = runner.invoke(app, ["unpause"])
+
+            assert result.exit_code == 0
+            mock_store.set_daemon_flag.assert_called_once_with("paused", "0")
+            assert "unpause flag set" in result.stdout
