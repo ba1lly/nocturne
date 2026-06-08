@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Nocturne pre-push hook: rejects branch deletions only (defense-in-depth alongside enforce_no_force_push).
+# Git pre-push hook semantics (man githooks): stdin gets one line per ref:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# Branch deletion = local_sha is all zeros (the local side has nothing to push).
+# New remote branch = remote_sha is all zeros (this is the normal Nocturne flow and MUST be allowed).
+set -euo pipefail
+ZERO_SHA="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$local_sha" == "$ZERO_SHA" ]]; then
+    echo "Nocturne pre-push: branch deletion rejected ($remote_ref)" >&2
+    exit 1
+  fi
+done
+exit 0
