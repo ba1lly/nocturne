@@ -65,11 +65,11 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 echo "✓ jq present"
 
-if ! command -v sqlite3 >/dev/null 2>&1; then
-    echo "FAIL: sqlite3 not found. Install via: apt-get install sqlite3"
+if ! python3 -c "import sqlite3" 2>/dev/null; then
+    echo "FAIL: python3 stdlib sqlite3 module not available"
     exit 1
 fi
-echo "✓ sqlite3 present"
+echo "✓ python3 sqlite3 module present"
 
 if [ -z "${DASHSCOPE_API_KEY:-}" ]; then
     echo "FAIL: DASHSCOPE_API_KEY env var not set"
@@ -193,7 +193,13 @@ echo "Daemon PID: $DAEMON_PID"
 POLL_DEADLINE=$((SECONDS + 180))
 RUNNING_PID=""
 while [ $SECONDS -lt $POLL_DEADLINE ]; do
-    RUNNING_PID=$(sqlite3 "$DB_PATH" "SELECT opencode_pid FROM tasks WHERE status='running' AND opencode_pid IS NOT NULL LIMIT 1" 2>/dev/null || true)
+    RUNNING_PID=$(DB_PATH="$DB_PATH" python3 << 'PYEOF' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+row = db.execute("SELECT opencode_pid FROM tasks WHERE status='running' AND opencode_pid IS NOT NULL LIMIT 1").fetchone()
+print(row[0] if row and row[0] is not None else '')
+PYEOF
+)
     if [ -n "$RUNNING_PID" ]; then
         echo "Found running task with opencode_pid: $RUNNING_PID"
         break
@@ -223,16 +229,32 @@ else
     sleep 60
     
     # Assert no stuck running rows
-    STUCK=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE status='running' AND opencode_pid=$RUNNING_PID" 2>/dev/null || echo "0")
+    STUCK=$(DB_PATH="$DB_PATH" RUNNING_PID="$RUNNING_PID" python3 << 'PYEOF' 2>/dev/null || echo "0"
+import os, sqlite3
+db = sqlite3.connect(os.environ['DB_PATH'])
+n = db.execute(
+    "SELECT COUNT(*) FROM tasks WHERE status='running' AND opencode_pid=?",
+    (int(os.environ['RUNNING_PID']),),
+).fetchone()[0]
+print(n)
+PYEOF
+)
     if [ "$STUCK" != "0" ]; then
         echo "FAIL: $STUCK stuck running tasks after restart"
         exit 1
     fi
     echo "✓ No stuck running tasks after restart"
     
-    # Save recovery evidence
-    sqlite3 "$DB_PATH" "SELECT id, status, opencode_pid FROM tasks WHERE opencode_pid=$RUNNING_PID" \
+    DB_PATH="$DB_PATH" RUNNING_PID="$RUNNING_PID" python3 << 'PYEOF' \
         > "$EVIDENCE_DIR/milestone-M4-sigkill-recovery.json" 2>/dev/null || true
+import os, sqlite3, json
+db = sqlite3.connect(os.environ['DB_PATH'])
+rows = db.execute(
+    "SELECT id, status, opencode_pid FROM tasks WHERE opencode_pid=?",
+    (int(os.environ['RUNNING_PID']),),
+).fetchall()
+print(json.dumps([{"id": r[0], "status": r[1], "opencode_pid": r[2]} for r in rows]))
+PYEOF
     
     echo "Test 2 PASS"
     
