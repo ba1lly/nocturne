@@ -593,6 +593,113 @@ def test_run_batch_need_input_falls_back_when_reason_empty(
     assert posted[0][2], "fallback question must be non-empty"
 
 
+def test_run_batch_skips_already_done_tasks(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    inmem_store.insert_task(t1)
+    inmem_store.update_status(t1.id, "done")
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
+
+    triage_called = {"n": 0}
+
+    def boom_triage(issues, c, **_kw):
+        triage_called["n"] += 1
+        return []
+
+    monkeypatch.setattr("nocturne.orchestrator.triage_batch", boom_triage)
+
+    process_called = {"n": 0}
+    monkeypatch.setattr(
+        "nocturne.orchestrator.process_task",
+        lambda task, c, store, *, dry_run=False: (process_called.update({"n": process_called["n"] + 1}), task)[1],
+    )
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert triage_called["n"] == 0, "already-done task must not be re-triaged"
+    assert process_called["n"] == 0, "already-done task must not be re-processed"
+    assert report.errors == []
+
+
+def test_run_batch_processes_resumed_task_without_re_triage(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t3 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+    inmem_store.insert_task(t3)
+    inmem_store.park_task(t3.id, "what spec?")
+    inmem_store.resume_task(t3.id, "Add median(values) returning the median.")
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t3])
+
+    triage_called = {"n": 0}
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c, **_kw: (triage_called.update({"n": triage_called["n"] + 1}), [])[1],
+    )
+
+    process_called: list[Task] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        process_called.append(task)
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert triage_called["n"] == 0, "resumed task must not be re-triaged"
+    assert len(process_called) == 1
+    assert process_called[0].id == t3.id
+    assert (process_called[0].answer or "").startswith("Add median"), \
+        "process_task must receive the resumed task row including the persisted answer"
+    assert len(report.done) == 1
+    assert report.done[0].id == t3.id
+
+
+def test_run_batch_mixed_fresh_resumed_and_done(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2").model_copy(update={"issue_number": 2})
+    t3 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#3").model_copy(update={"issue_number": 3})
+
+    inmem_store.insert_task(t1)
+    inmem_store.update_status(t1.id, "done")
+    inmem_store.insert_task(t3)
+    inmem_store.park_task(t3.id, "?")
+    inmem_store.resume_task(t3.id, "answer")
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2, t3])
+
+    triage_inputs: list[list[Task]] = []
+
+    def captured_triage(issues, c, **_kw):
+        triage_inputs.append(list(issues))
+        return [(issues[0], _make_triage_result(issues[0], "DOABLE", 80))]
+
+    monkeypatch.setattr("nocturne.orchestrator.triage_batch", captured_triage)
+
+    processed: list[Task] = []
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        processed.append(task)
+        store.update_status(task.id, "done")
+        return _make_done_task(task)
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(triage_inputs) == 1
+    assert [t.id for t in triage_inputs[0]] == [t2.id], "only fresh issue #2 should hit triage"
+    assert {t.id for t in processed} == {t2.id, t3.id}
+    assert {t.id for t in report.done} == {t2.id, t3.id}
+    assert report.errors == []
+
+
 def test_run_batch_ordering_respected(
     monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
 ) -> None:

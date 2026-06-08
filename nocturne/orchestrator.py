@@ -258,56 +258,88 @@ def run_batch(
 
     log.info("fetched %s eligible issues from %s", len(issues), repo_cfg.slug)
 
-    try:
-        triaged = triage_batch(issues, cfg, dry_run=dry_run)
-    except Exception as e:
-        log.error("triage_batch failed: %s", e)
-        errors.append(f"triage_batch: {e}")
-        ended_at = datetime.now(timezone.utc)
-        return RunReport(
-            started_at=started_at,
-            ended_at=ended_at,
-            done=[],
-            parked=[],
-            skipped=[],
-            aborted=[],
-            errors=errors,
-            summary="",
-            token_usage=0,
+    to_triage: list[Task] = []
+    resumed: list[Task] = []
+    for task in issues:
+        existing = store.get_task(task.id)
+        if existing is None:
+            to_triage.append(task)
+            continue
+        if existing.status == "selected" and (existing.answer or "").strip():
+            resumed.append(existing)
+            continue
+        log.info(
+            "task %s already in store (status=%s); skipping in this batch",
+            task.id, existing.status,
         )
 
-    for task, tr in triaged:
+    if resumed or to_triage:
+        log.info(
+            "batch partition: %d resumed, %d to triage, %d already-handled",
+            len(resumed), len(to_triage), len(issues) - len(resumed) - len(to_triage),
+        )
+
+    wallclock_exhausted = False
+    for task in resumed:
         try:
             check_wallclock(started_at, cfg)
         except GuardrailViolation as ge:
             log.warning("wallclock guard fired mid-batch: %s", ge)
             errors.append(f"wallclock budget exhausted: {ge}")
+            wallclock_exhausted = True
             break
 
         try:
-            status = _dispatch_triaged(task, tr, cfg, store, dry_run=dry_run)
+            result_task = process_task(task, cfg, store, dry_run=dry_run)
         except Exception as e:
-            log.error("task %s raised: %s", task.id, e)
+            log.error("resumed task %s raised: %s", task.id, e)
             errors.append(f"{task.id}: {type(e).__name__}: {e}")
             continue
 
-        if status == "done":
-            done.append(store.get_task(task.id) or task)
-        elif status == "aborted":
-            aborted.append(store.get_task(task.id) or task)
-        elif status == "parked":
-            base = task.model_dump()
-            base.pop("question", None)
-            parked.append(
-                ParkedTask(
-                    **base,
-                    question=tr.reason or "Triage classified as NEED_INPUT — clarification required.",
-                    parked_at=datetime.now(timezone.utc),
+        if result_task.status == "done":
+            done.append(result_task)
+        elif result_task.status == "aborted":
+            aborted.append(result_task)
+
+    if to_triage and not wallclock_exhausted:
+        try:
+            triaged = triage_batch(to_triage, cfg, dry_run=dry_run)
+        except Exception as e:
+            log.error("triage_batch failed: %s", e)
+            errors.append(f"triage_batch: {e}")
+            triaged = []
+
+        for task, tr in triaged:
+            try:
+                check_wallclock(started_at, cfg)
+            except GuardrailViolation as ge:
+                log.warning("wallclock guard fired mid-batch: %s", ge)
+                errors.append(f"wallclock budget exhausted: {ge}")
+                break
+
+            try:
+                status = _dispatch_triaged(task, tr, cfg, store, dry_run=dry_run)
+            except Exception as e:
+                log.error("task %s raised: %s", task.id, e)
+                errors.append(f"{task.id}: {type(e).__name__}: {e}")
+                continue
+
+            if status == "done":
+                done.append(store.get_task(task.id) or task)
+            elif status == "aborted":
+                aborted.append(store.get_task(task.id) or task)
+            elif status == "parked":
+                base = task.model_dump()
+                base.pop("question", None)
+                parked.append(
+                    ParkedTask(
+                        **base,
+                        question=tr.reason or "Triage classified as NEED_INPUT — clarification required.",
+                        parked_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
-        elif status == "skipped":
-            skipped.append((task.issue_number, tr.reason))
-        # status == "failed": leave row in store with status=failed; nothing added to done.
+            elif status == "skipped":
+                skipped.append((task.issue_number, tr.reason))
 
     ended_at = datetime.now(timezone.utc)
     return RunReport(

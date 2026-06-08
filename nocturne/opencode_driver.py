@@ -25,6 +25,9 @@ SENTINEL = "##NOCTURNE_NEED_INPUT##"
 
 
 def render_prompt(task: Task, cfg: Config, prior_failure: str | None = None) -> str:
+    if (task.answer or "").strip():
+        from nocturne.askflow import render_resume_prompt
+        return render_resume_prompt(task, cfg, prior_failure)
     return render_task_prompt(task, cfg, prior_failure)
 
 
