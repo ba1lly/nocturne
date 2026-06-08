@@ -111,6 +111,7 @@ class ReviewConfig(StrictBaseModel):
     budget_attempts: int = 2
     severity_floor: Literal["info", "low", "medium", "high", "critical"] = "info"
     skill_name: str = "reviewer"
+    slash_command: str = "review-pr"
     append_only: Literal[True] = True
     fallback_repos: list[str] = Field(
         default_factory=lambda: ["ba1lly/reviewer-config", "Defizoo/reviewer"]

@@ -221,30 +221,34 @@ def review_pr(
             clean=True, findings=[], raw_output="", attempts=1, skill_used=skill_used,
         )
 
+    prompt_path: Optional[str] = None
     if used_default:
         prompt = _render_default_review_prompt(pr_url, diff)
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", dir=None, delete=False,
+        ) as f:
+            f.write(prompt)
+            prompt_path = f.name
+        opencode_args = [
+            cfg.opencode.command, "run",
+            "--model", cfg.models.reasoning,
+            "--dir", str(worktree),
+            "--format", "json",
+            "-f", prompt_path,
+        ]
     else:
-        assert skill_name_or_none is not None
-        prompt = _render_review_prompt(skill_name_or_none, pr_url, diff)
-
-    # Write the prompt to a temp file in the worktree and invoke OpenCode.
-    # We use subprocess directly (not opencode_driver.run) because the review
-    # flow does not use a Task model — it uses the reasoning model on a diff.
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", dir=None, delete=False
-    ) as f:
-        f.write(prompt)
-        prompt_path = f.name
+        opencode_args = [
+            cfg.opencode.command, "run",
+            "--dir", str(worktree),
+            "--format", "json",
+            "--command", cfg.review.slash_command,
+            "--",
+            pr_url,
+        ]
 
     try:
         result = subprocess.run(
-            [
-                cfg.opencode.command, "run",
-                "--model", cfg.models.reasoning,
-                "--dir", str(worktree),
-                "--format", "json",
-                "-f", prompt_path,
-            ],
+            opencode_args,
             capture_output=True, text=True,
             timeout=cfg.opencode.timeout_min * 60,
             check=False,
@@ -257,10 +261,11 @@ def review_pr(
             attempts=1, skill_used=skill_used,
         )
     finally:
-        try:
-            Path(prompt_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        if prompt_path is not None:
+            try:
+                Path(prompt_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # Extract text from OpenCode's --format json NDJSON output.
     # Each line is a JSON event; we collect "text" or "content" fields.

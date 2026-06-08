@@ -124,6 +124,63 @@ def test_review_clean_returns_no_findings(
     assert result.skill_used == cfg.review.skill_name
 
 
+def test_review_with_skill_invokes_slash_command_not_inline_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """When the reviewer skill is available, review_pr must delegate to the
+    user's /review-pr slash command via 'opencode run --command', not render
+    a custom prompt to a temp file. The slash command already loads the
+    skill and runs the multi-agent pipeline."""
+    _patch_skill_enabled(monkeypatch, True)
+    _patch_diff(monkeypatch, "diff --git a/x b/x\n+hello\n")
+    captured: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        if isinstance(args, (list, tuple)) and len(args) > 0 and args[0] == "git":
+            return subprocess.run(args, **kwargs)
+        captured.append(list(args))
+        return _fake_completed(stdout=_ndjson_text_event("```json\n[]\n```"))
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+    cfg = _cfg()
+    pr_url = "https://github.com/ba1lly/nocturne-playground/pull/42"
+
+    review_pr(pr_url, tmp_path, cfg)
+
+    assert len(captured) == 1
+    args = captured[0]
+    assert "--command" in args
+    assert args[args.index("--command") + 1] == cfg.review.slash_command
+    assert pr_url in args
+    assert "-f" not in args, "must not pass a custom prompt file when delegating to the slash command"
+    assert "--model" not in args, "let opencode + the skill pick the model"
+
+
+def test_review_skill_path_honors_custom_slash_command_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """cfg.review.slash_command is configurable; review_pr passes whatever
+    the operator set, not a hardcoded 'review-pr'."""
+    _patch_skill_enabled(monkeypatch, True)
+    _patch_diff(monkeypatch, "diff --git a/x b/x\n+hi\n")
+    captured: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        if isinstance(args, (list, tuple)) and len(args) > 0 and args[0] == "git":
+            return subprocess.run(args, **kwargs)
+        captured.append(list(args))
+        return _fake_completed(stdout=_ndjson_text_event("```json\n[]\n```"))
+
+    monkeypatch.setattr(review_mod.subprocess, "run", fake_run)
+    cfg = _cfg()
+    cfg.review.slash_command = "my-custom-review"
+
+    review_pr("https://github.com/x/y/pull/1", tmp_path, cfg)
+
+    assert len(captured) == 1
+    assert captured[0][captured[0].index("--command") + 1] == "my-custom-review"
+
+
 def test_review_finds_high_severity(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
