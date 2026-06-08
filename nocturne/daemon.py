@@ -159,6 +159,13 @@ class Daemon:
                             cycle_summary["processed_done"] += 1
                         else:
                             cycle_summary["processed_failed"] += 1
+                        # Post task completion to Discord (non-blocking)
+                        if self.bot is not None:
+                            from nocturne.reporter import post_task_report
+                            try:
+                                await post_task_report(result_task, self.bot)
+                            except Exception as e:
+                                logger.warning("Discord task report failed (non-blocking): %s", e)
                     except Exception as e:
                         logger.error("process_task raised for %s: %s", task.id, e)
                         cycle_summary["errors"].append(f"process:{task.id}:{e}")

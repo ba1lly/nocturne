@@ -158,3 +158,76 @@ def discord_message(report: RunReport) -> str:
         return message[:277] + "..."
     
     return message
+
+
+# Task 35: Discord posting (M4)
+
+# Status-emoji map for task-end messages (different from log-level emojis)
+_TASK_EMOJI = {
+    "done": "🟢",
+    "parked": "🟡",
+    "failed": "🔴",
+    "aborted": "⚪",
+    "skipped": "⚫",
+}
+
+
+def _format_task_report(task: "Task", duration_ms: Optional[int] = None) -> str:
+    """Build a 280-char-capped Discord message for a single completed task."""
+    emoji = _TASK_EMOJI.get(task.status, "•")
+    parts = [emoji, f"#{task.issue_number}", (task.title or "")[:50]]
+    if task.pr_url:
+        parts.append(f"— PR: {task.pr_url}")
+    if duration_ms is not None and duration_ms > 0:
+        parts.append(f"({timedelta(milliseconds=duration_ms)})")
+    text = " ".join(parts)
+    if len(text) > 280:
+        text = text[:277] + "..."
+    return text
+
+
+async def post_task_report(task: "Task", bot, duration_ms: int = 0) -> Optional[int]:
+    """Post a single-task completion message to Discord (non-pinging).
+    
+    Returns the Discord message ID (or None if bot is None/dispatch fails).
+    Non-blocking on failure (logged + returns None).
+    """
+    if bot is None:
+        return None
+    text = _format_task_report(task, duration_ms)
+    try:
+        return await bot.send_status_msg(text)
+    except Exception as e:
+        logger.warning("post_task_report failed (non-blocking): %s", e)
+        return None
+
+
+def _format_run_report(report: RunReport) -> str:
+    """Build a 280-char-capped Discord summary for an entire run."""
+    parts = [
+        "📊 Run complete:",
+        f"{len(report.done)} done",
+        f"· {len(report.parked)} parked",
+        f"· {len(report.skipped)} skipped",
+        f"· {len(report.errors)} errors",
+    ]
+    # Include duration if both timestamps present
+    if report.started_at and report.ended_at:
+        dur = _human_duration(report.started_at, report.ended_at)
+        parts.append(f"· {dur}")
+    text = " ".join(parts)
+    if len(text) > 280:
+        text = text[:277] + "..."
+    return text
+
+
+async def post_run_report(report: RunReport, bot) -> Optional[int]:
+    """Post a run-complete summary to Discord (non-pinging)."""
+    if bot is None:
+        return None
+    text = _format_run_report(report)
+    try:
+        return await bot.send_status_msg(text)
+    except Exception as e:
+        logger.warning("post_run_report failed (non-blocking): %s", e)
+        return None

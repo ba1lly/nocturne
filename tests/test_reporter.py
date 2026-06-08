@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -14,6 +14,10 @@ from nocturne.reporter import (
     discord_message,
     _human_duration,
     _deterministic_summary,
+    _format_task_report,
+    _format_run_report,
+    post_task_report,
+    post_run_report,
 )
 
 
@@ -447,3 +451,279 @@ class TestDiscordMessage:
         result = discord_message(report)
         
         assert "PR:" not in result
+
+
+class TestFormatTaskReport:
+    def test_format_task_report_done_with_pr(self) -> None:
+        """Done task with PR url → message starts with 🟢, contains PR url."""
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url="https://github.com/x/y/pull/1",
+        )
+        msg = _format_task_report(t)
+        assert msg.startswith("🟢")
+        assert "#42" in msg
+        assert "pull/1" in msg
+
+    def test_format_task_report_parked(self) -> None:
+        """Parked task → 🟡 emoji."""
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="parked",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        msg = _format_task_report(t)
+        assert msg.startswith("🟡")
+
+    def test_format_task_report_failed(self) -> None:
+        """Failed task → 🔴 emoji."""
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="failed",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        msg = _format_task_report(t)
+        assert msg.startswith("🔴")
+
+    def test_format_task_report_truncates_at_280(self) -> None:
+        """Very long title → message truncated to 280 chars with ... suffix."""
+        long_title = "X" * 500
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title=long_title,
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url="https://x/y",
+        )
+        msg = _format_task_report(t)
+        assert len(msg) <= 280
+
+    def test_280_cap(self) -> None:
+        """Alias for the cap test under the QA scenario name."""
+        long_title = "Y" * 1000
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title=long_title,
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        msg = _format_task_report(t)
+        assert len(msg) <= 280
+
+
+class TestFormatRunReport:
+    def test_format_run_report_includes_counts(self) -> None:
+        """Run report message includes all four count categories."""
+        t1 = Task(
+            id="x/y#1",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=1,
+            title="Task 1",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        t2 = Task(
+            id="x/y#2",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=2,
+            title="Task 2",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        report = RunReport(
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            done=[t1, t2],
+            parked=[],
+            skipped=[(3, "vague")],
+            errors=["err1"],
+            summary="",
+            token_usage=0,
+        )
+        msg = _format_run_report(report)
+        assert "2 done" in msg
+        assert "1 skipped" in msg
+        assert "1 errors" in msg
+
+
+class TestPostTaskReport:
+    @pytest.mark.asyncio
+    async def test_post_task_report_no_mention(self) -> None:
+        """Task completion → bot.send_status_msg called with NO <@ mention pattern."""
+        bot = MagicMock()
+        bot.send_status_msg = AsyncMock(return_value=12345)
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url="https://x/y",
+        )
+        msg_id = await post_task_report(t, bot)
+        assert msg_id == 12345
+        args, kwargs = bot.send_status_msg.call_args
+        text = args[0]
+        assert "<@" not in text, f"unexpected mention pattern in: {text}"
+
+    @pytest.mark.asyncio
+    async def test_post_task_report_no_bot_returns_none(self) -> None:
+        """No bot → returns None silently."""
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        assert await post_task_report(t, None) is None
+
+    @pytest.mark.asyncio
+    async def test_post_task_report_swallows_bot_failure(self) -> None:
+        """Bot raises → post_task_report logs warning, returns None (non-blocking)."""
+        bot = MagicMock()
+        bot.send_status_msg = AsyncMock(side_effect=RuntimeError("boom"))
+        t = Task(
+            id="x/y#42",
+            repo_slug="x/y",
+            checkout_path="/tmp/x",
+            issue_number=42,
+            title="Fix divide() bug",
+            body="b",
+            base="main",
+            verify_cmd="pytest",
+            require_new_test=False,
+            coding_model="x/y",
+            branch="b",
+            status="done",
+            attempts=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            pr_url=None,
+        )
+        result = await post_task_report(t, bot)
+        assert result is None
+
+
+class TestPostRunReport:
+    @pytest.mark.asyncio
+    async def test_post_run_report_calls_bot(self) -> None:
+        """post_run_report calls bot.send_status_msg and returns message ID."""
+        bot = MagicMock()
+        bot.send_status_msg = AsyncMock(return_value=99999)
+        report = RunReport(
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            done=[],
+            parked=[],
+            skipped=[],
+            errors=[],
+            summary="",
+            token_usage=0,
+        )
+        msg_id = await post_run_report(report, bot)
+        assert msg_id == 99999
