@@ -112,7 +112,8 @@ echo ""
 echo "=== Step 1: Pre-state Cleanup ==="
 
 # Close any open PRs from prior runs
-gh pr list --repo "$REPO" --search "head:nocturne/issue-" --state open --json url --jq '.[].url' \
+gh pr list --repo "$REPO" --state open --json url,headRefName \
+    --jq '.[] | select(.headRefName | startswith("nocturne/issue-")) | .url' \
     | xargs -r -I{} gh pr close {} --delete-branch 2>/dev/null || true
 echo "✓ Cleaned up any prior nocturne/issue-* PRs"
 
@@ -135,10 +136,15 @@ echo ""
 
 echo "=== Test 1: Daemon single-cycle + SIGTERM clean shutdown ==="
 
-(.venv/bin/nocturne --config "$NOCTURNE_CONFIG" --state-dir "$STATE_DIR" daemon --once &) \
-    2>"$EVIDENCE_DIR/milestone-M4-daemon-once.log"
+.venv/bin/nocturne --config "$NOCTURNE_CONFIG" --state-dir "$STATE_DIR" daemon --once \
+    >"$EVIDENCE_DIR/milestone-M4-daemon-once.log" 2>&1 &
 DAEMON_PID=$!
 echo "Daemon PID: $DAEMON_PID"
+
+if [ -z "$DAEMON_PID" ] || ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+    echo "FAIL: failed to capture daemon PID or daemon died immediately"
+    exit 1
+fi
 
 # Wait for daemon to start processing
 sleep 30
