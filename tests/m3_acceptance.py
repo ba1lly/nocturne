@@ -13,11 +13,9 @@ This test exercises the complete M3 acceptance criteria:
   8. Assert no duplicate question comments on Issue #3 (Metis invariant)
 """
 
-import json
 import os
 import sqlite3
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -260,6 +258,7 @@ def test_m3_issue_3_transitions_to_done(state_dir):
     """Step 8: Poll up to 120s for Issue #3 status → done."""
     db_path = state_dir / "nocturne.db"
     deadline = time.time() + 120
+    status = "unknown"
 
     while time.time() < deadline:
         db = sqlite3.connect(str(db_path))
