@@ -64,26 +64,45 @@ def fake_cfg():
     )
 
 
-@pytest.fixture
-def fake_discord(monkeypatch):
-    """Stub the discord module so NocturneBot can be constructed without live Discord."""
+def _build_fake_discord(monkeypatch):
     import nocturne.discord_bot as bot_module
     fake = MagicMock()
-    # Intents
     fake.Intents.default.return_value = MagicMock()
-    # Client class
     client_instance = MagicMock()
     client_instance.user = MagicMock(id=999)
     client_instance.get_channel = MagicMock()
-    # event registration — return the registered fn unchanged
     client_instance.event = MagicMock(side_effect=lambda fn: fn)
     fake.Client.return_value = client_instance
-    # Embed class
     embed_instance = MagicMock()
     embed_instance.set_footer = MagicMock(return_value=embed_instance)
     fake.Embed.return_value = embed_instance
+    tree = MagicMock()
+    tree.command = MagicMock(side_effect=lambda *a, **k: lambda fn: fn)
+    fake.app_commands = MagicMock()
+    fake.app_commands.CommandTree.return_value = tree
     monkeypatch.setattr(bot_module, "discord", fake)
+    return fake, client_instance, tree
+
+
+@pytest.fixture
+def fake_discord(monkeypatch):
+    """Stub the discord module so NocturneBot can be constructed without live Discord."""
+    fake, client_instance, _tree = _build_fake_discord(monkeypatch)
     return fake, client_instance
+
+
+@pytest.fixture
+def fake_discord_with_commands(monkeypatch):
+    """Stub discord including app_commands.CommandTree decorator pass-through."""
+    return _build_fake_discord(monkeypatch)
+
+
+def _make_interaction(user_id: int):
+    interaction = MagicMock()
+    interaction.user = MagicMock(id=user_id)
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    return interaction
 
 
 # -- Store extension tests --
@@ -336,5 +355,245 @@ async def test_send_status_msg_no_channel_returns_none(inmem_store, fake_cfg, fa
     assert mid is None
 
 
-# Touch the imports kept for compatibility with the spec scaffolding.
+# -- Slash command tests --
+
+
+def _seed_task(store, *, task_id="x/y#1", status="selected", question=None):
+    from nocturne.models import Task
+    t = Task(
+        id=task_id,
+        repo_slug=task_id.split("#")[0],
+        checkout_path="/tmp/x",
+        issue_number=int(task_id.split("#")[1]),
+        title="t",
+        body="b",
+        base="main",
+        verify_cmd="pytest",
+        require_new_test=False,
+        coding_model="x/y",
+        branch="b",
+        status=status,
+        attempts=0,
+        question=question,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    store.insert_task(t)
+    return t
+
+
+@pytest.mark.asyncio
+async def test_cmd_status(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+    fake_daemon = MagicMock()
+    fake_daemon.is_paused.return_value = False
+    fake_daemon.tokens_used = 12345
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb, daemon=fake_daemon)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_status(interaction)
+    interaction.response.send_message.assert_awaited()
+    args, _kwargs = interaction.response.send_message.call_args
+    text = args[0]
+    assert "queue:" in text and "parked:" in text and "PRs:" in text
+    assert "12345" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_unauthorized(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(user_id=0)
+    await bot._cmd_status(interaction)
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "not authorized" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_pause_calls_daemon_pause(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+    fake_daemon = MagicMock()
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb, daemon=fake_daemon)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_pause(interaction)
+    fake_daemon.pause.assert_called_once()
+    args, _kwargs = interaction.response.send_message.call_args
+    assert args[0] == "paused"
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_calls_daemon_resume(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+    fake_daemon = MagicMock()
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb, daemon=fake_daemon)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_resume(interaction)
+    fake_daemon.resume.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_pause_no_daemon_replies(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb, daemon=None)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_pause(interaction)
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "no daemon" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_cmd_queue_empty(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_queue(interaction)
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "empty" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_cmd_queue_populated(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+    _seed_task(inmem_store, task_id="x/y#1", status="selected")
+    _seed_task(inmem_store, task_id="a/b#2", status="parked", question="why?")
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_queue(interaction)
+    args, _kwargs = interaction.response.send_message.call_args
+    text = args[0]
+    assert "x/y#1" in text and "a/b#2" in text and "why?" in text
+
+
+@pytest.mark.asyncio
+async def test_cmd_skip_marks_task_skipped(
+    inmem_store, fake_cfg, fake_discord_with_commands, monkeypatch
+):
+    from nocturne.discord_bot import NocturneBot
+    _seed_task(inmem_store, task_id="x/y#1", status="selected")
+    import nocturne.sources.github_issues as gh
+    monkeypatch.setattr(gh, "comment", lambda *a, **k: None)
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_skip(interaction, "x/y#1")
+    updated = inmem_store.get_task("x/y#1")
+    assert updated is not None and updated.status == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_cmd_skip_unknown_task(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_skip(interaction, "nope/nope#42")
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "not found" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_answer_invokes_resume_callback(
+    inmem_store, fake_cfg, fake_discord_with_commands
+):
+    from nocturne.discord_bot import NocturneBot
+    captured: list[tuple[str, str]] = []
+
+    async def cb(task_id, answer):
+        captured.append((task_id, answer))
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_answer(interaction, "x/y#1", "my answer")
+    assert captured == [("x/y#1", "my answer")]
+
+
+@pytest.mark.asyncio
+async def test_cmd_run_unallowed_repo(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_run(interaction, "evil/repo")
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "not in allowlist" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_cmd_run_allowed_repo_schedules(
+    inmem_store, fake_cfg, fake_discord_with_commands, monkeypatch
+):
+    from nocturne.discord_bot import NocturneBot
+    import nocturne.orchestrator as orch
+    called = {"n": 0}
+
+    def fake_run_batch(repo_cfg, cfg, store, *, dry_run=False):
+        called["n"] += 1
+        return None
+
+    monkeypatch.setattr(orch, "run_batch", fake_run_batch)
+
+    async def cb(t, a):
+        return None
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(fake_cfg.discord.mention_user_id)
+    await bot._cmd_run(interaction, "ba1lly/sandbox")
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "started run" in args[0]
+    await asyncio.sleep(0.05)
+    assert called["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cmd_answer_unauthorized(inmem_store, fake_cfg, fake_discord_with_commands):
+    from nocturne.discord_bot import NocturneBot
+    captured: list[tuple[str, str]] = []
+
+    async def cb(task_id, answer):
+        captured.append((task_id, answer))
+
+    bot = NocturneBot(fake_cfg, inmem_store, cb)
+    interaction = _make_interaction(user_id=0)
+    await bot._cmd_answer(interaction, "x/y#1", "my answer")
+    assert captured == []
+    args, _kwargs = interaction.response.send_message.call_args
+    assert "not authorized" in args[0]
+
+
 _ = (datetime, timezone, Store)
