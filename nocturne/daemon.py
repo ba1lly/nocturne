@@ -119,6 +119,8 @@ class Daemon:
             "processed_failed": 0,
             "errors": [],
         }
+        cycle_done: list = []
+        cycle_failed: list = []
 
         # Check pause flag at top.
         if await self._check_paused_flag():
@@ -133,6 +135,7 @@ class Daemon:
             cycle_summary["budget_exhausted"] = True
             return cycle_summary
 
+        cycle_started_at = datetime.now(timezone.utc)
         for repo_cfg in self.cfg.repos:
             try:
                 issues = await asyncio.to_thread(fetch_eligible, repo_cfg)
@@ -158,8 +161,10 @@ class Daemon:
                         )
                         if result_task.status == "done":
                             cycle_summary["processed_done"] += 1
+                            cycle_done.append(result_task)
                         else:
                             cycle_summary["processed_failed"] += 1
+                            cycle_failed.append(result_task)
                         # Post task completion to Discord (non-blocking)
                         if self.bot is not None:
                             from nocturne.reporter import post_task_report
@@ -194,7 +199,27 @@ class Daemon:
             if cycle_summary.get("budget_exhausted"):
                 break
 
-        self._last_poll_at = datetime.now(timezone.utc)
+        cycle_ended_at = datetime.now(timezone.utc)
+        self._last_poll_at = cycle_ended_at
+
+        if self.bot is not None and (cycle_done or cycle_failed or cycle_summary["errors"]):
+            try:
+                from nocturne.models import RunReport
+                from nocturne.reporter import post_run_report
+                report = RunReport(
+                    started_at=cycle_started_at,
+                    ended_at=cycle_ended_at,
+                    done=cycle_done,
+                    parked=[],
+                    skipped=[],
+                    errors=[str(e) for e in cycle_summary["errors"]],
+                    summary="",
+                    token_usage=self._tokens_used,
+                )
+                await post_run_report(report, self.bot)
+            except Exception as e:
+                logger.warning("Discord run report failed (non-blocking): %s", e)
+
         return cycle_summary
 
     def _schedule_review(self, result_task: Any) -> None:
@@ -362,23 +387,18 @@ class Daemon:
 
 
 def run_daemon(cfg: Config, store: Store) -> None:
-    """Build bot (if cfg.discord.enabled), wire resume callback, run via asyncio.run."""
-    bot = None
+    """Build bot (if cfg.discord.enabled), wire resume + daemon refs, run via asyncio.run."""
+    daemon = Daemon(cfg, store, bot=None)
     if cfg.discord.enabled:
         try:
             from nocturne.askflow import resume_with_answer
             from nocturne.discord_bot import make_bot
 
             async def _resume_cb(task_id: str, answer: str) -> None:
-                # Wrap synchronous resume_with_answer (store ops) for the
-                # async bot loop.
                 await asyncio.to_thread(resume_with_answer, task_id, answer, cfg, store)
 
-            bot = make_bot(cfg, store, _resume_cb)
+            daemon.bot = make_bot(cfg, store, _resume_cb, daemon=daemon)
         except Exception as e:
-            logger.warning(
-                "could not create Discord bot (continuing without): %s", e
-            )
+            logger.warning("could not create Discord bot (continuing without): %s", e)
 
-    daemon = Daemon(cfg, store, bot=bot)
     asyncio.run(daemon.run())

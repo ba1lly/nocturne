@@ -333,6 +333,22 @@ def apply_fixes(
         logger.info("apply_fixes for %s: no changes after opencode run", pr_url)
         return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
 
+    # Pre-commit gate: run the configured verify_cmd before pushing fix commits.
+    # The reviewer's "fix" is only acceptable if verification passes.
+    verify_cmd = _verify_cmd_for_pr(pr_url, cfg)
+    if verify_cmd is not None:
+        verify_result = subprocess.run(
+            verify_cmd, shell=True, cwd=str(worktree),
+            capture_output=True, text=True, timeout=600,
+            check=False,
+        )
+        if verify_result.returncode != 0:
+            logger.warning(
+                "apply_fixes verify failed for %s (exit %s): %s",
+                pr_url, verify_result.returncode, (verify_result.stderr or "")[:400],
+            )
+            return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
+
     commit_msg = (
         f"fix(review): address {len(findings)} reviewer findings [round {attempt}]"
     )
@@ -343,6 +359,23 @@ def apply_fixes(
         return ApplyFixesResult(commits_added=0, verify_passed=False, fix_attempts=attempt)
 
     return ApplyFixesResult(commits_added=1, verify_passed=True, fix_attempts=attempt)
+
+
+def _verify_cmd_for_pr(pr_url: str, cfg: Config) -> Optional[str]:
+    """Resolve the verify_cmd to use for a given PR URL.
+
+    Matches against the repos allowlist by slug. Returns None if no match
+    (caller should skip the verify gate rather than fail closed).
+    """
+    import re as _re
+    m = _re.search(r"github\.com/([^/]+/[^/]+)/pull/", pr_url)
+    if not m:
+        return None
+    slug = m.group(1)
+    for r in cfg.repos:
+        if r.slug == slug:
+            return r.verify_cmd
+    return None
 
 
 def review_fix_loop(
