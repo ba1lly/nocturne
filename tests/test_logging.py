@@ -83,6 +83,55 @@ def test_sensitive_filter_redacts_args_tuple() -> None:
     assert "Bearer xyz123" not in output
 
 
+def test_sensitive_filter_preserves_numeric_args_for_format_specifiers() -> None:
+    """Regression: SensitiveFilter must not stringify numeric args.
+
+    Previously _scrub_text(item) was applied to every arg, converting
+    float 0.5 -> str '0.5'. Then 'retry in %f seconds' % ('0.5',) raised
+    TypeError: must be real number, not str. That error propagated out
+    of log.warning calls via RichHandler.emit and was misattributed to
+    triage / reporter parse failures.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SensitiveFilter())
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger = logging.getLogger("nocturne.test.numeric")
+    logger.handlers[:] = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    logger.info("retry in %f seconds after %d attempts", 0.5, 3)
+    handler.flush()
+
+    output = stream.getvalue()
+    assert "0.500000" in output
+    assert "3" in output
+
+
+def test_sensitive_filter_redacts_string_args_but_keeps_numbers_typed() -> None:
+    """A single tuple mixing secret-strings and numbers must scrub the
+    string and preserve the number's type so %-formatting works."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SensitiveFilter())
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger = logging.getLogger("nocturne.test.mixed")
+    logger.handlers[:] = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    logger.info("got %d events from %s", 42, "Bearer sk-leaked123")
+    handler.flush()
+
+    output = stream.getvalue()
+    assert "42" in output
+    assert "Bearer sk-leaked123" not in output
+    assert "***" in output
+
+
 def test_discord_formatter_info_prefix() -> None:
     record = _record("hello world", level=logging.INFO)
 

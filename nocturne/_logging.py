@@ -28,6 +28,12 @@ def _scrub_text(value: object) -> str:
     return SECRET_REGEX.sub("***", str(value))
 
 
+def _scrub_arg(value: object) -> object:
+    if isinstance(value, str):
+        return _scrub_text(value)
+    return value
+
+
 class SensitiveFilter(logging.Filter):
     @override
     def filter(self, record: logging.LogRecord) -> bool:
@@ -35,10 +41,10 @@ class SensitiveFilter(logging.Filter):
 
         args = record.args
         if isinstance(args, tuple):
-            record.args = tuple(_scrub_text(item) for item in args)
+            record.args = tuple(_scrub_arg(item) for item in args)
         elif isinstance(args, list):
             items = cast(list[object], args)
-            record.args = tuple(_scrub_text(item) for item in items)
+            record.args = tuple(_scrub_arg(item) for item in items)
 
         return True
 
