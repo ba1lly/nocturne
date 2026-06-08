@@ -241,7 +241,6 @@ class TestTriageBatch:
     def test_triage_batch_post_skip_comment_failure_non_blocking(
         self, cfg: Config, mock_openai, monkeypatch
     ) -> None:
-        # One SKIP issue; post_skip_comment raises but triage_batch must NOT raise
         def boom(*a, **kw):
             raise RuntimeError("comment subsystem exploded")
 
@@ -256,9 +255,53 @@ class TestTriageBatch:
         issues = [_make_task(task_id="issue#skip", issue_number=99, title="huge refactor")]
         result = triage_batch(issues, cfg)
 
-        # Did not raise; the triaged pair is still returned
         assert len(result) == 1
         assert result[0][1].outcome == "SKIP"
+
+    def test_triage_batch_dry_run_does_not_post_skip_comment(
+        self, cfg: Config, mock_openai, monkeypatch
+    ) -> None:
+        calls: list[tuple[str, int, str]] = []
+
+        def recorder(repo_slug: str, issue_number: int, reason: str) -> None:
+            calls.append((repo_slug, issue_number, reason))
+
+        monkeypatch.setattr("nocturne.triage.post_skip_comment", recorder)
+
+        mock_openai.responses.append(
+            '{"outcome":"SKIP","priority":3,"reason":"too big"}'
+        )
+
+        from nocturne.triage import triage_batch
+
+        issues = [_make_task(task_id="issue#skip", issue_number=99, title="huge refactor")]
+        result = triage_batch(issues, cfg, dry_run=True)
+
+        assert len(result) == 1
+        assert result[0][1].outcome == "SKIP"
+        assert calls == [], "dry_run=True must not invoke post_skip_comment"
+
+    def test_triage_batch_default_posts_skip_comment(
+        self, cfg: Config, mock_openai, monkeypatch
+    ) -> None:
+        calls: list[tuple[str, int, str]] = []
+
+        def recorder(repo_slug: str, issue_number: int, reason: str) -> None:
+            calls.append((repo_slug, issue_number, reason))
+
+        monkeypatch.setattr("nocturne.triage.post_skip_comment", recorder)
+
+        mock_openai.responses.append(
+            '{"outcome":"SKIP","priority":3,"reason":"too big"}'
+        )
+
+        from nocturne.triage import triage_batch
+
+        issues = [_make_task(task_id="issue#skip", issue_number=99, title="huge refactor")]
+        triage_batch(issues, cfg)
+
+        assert len(calls) == 1
+        assert calls[0][1] == 99
 
 
 # ---------------------------------------------------------------------------

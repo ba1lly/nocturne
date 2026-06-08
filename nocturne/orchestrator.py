@@ -242,7 +242,7 @@ def run_batch(
     log.info("fetched %s eligible issues from %s", len(issues), repo_cfg.slug)
 
     try:
-        triaged = triage_batch(issues, cfg)
+        triaged = triage_batch(issues, cfg, dry_run=dry_run)
     except Exception as e:
         log.error("triage_batch failed: %s", e)
         errors.append(f"triage_batch: {e}")

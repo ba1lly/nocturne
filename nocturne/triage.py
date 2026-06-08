@@ -197,7 +197,9 @@ def post_skip_comment(repo_slug: str, issue_number: int, reason: str) -> None:
 _OUTCOME_RANK = {"DOABLE": 0, "NEED_INPUT": 1, "SKIP": 2}
 
 
-def triage_batch(issues: list[Task], cfg: Config) -> list[tuple[Task, TriageResult]]:
+def triage_batch(
+    issues: list[Task], cfg: Config, *, dry_run: bool = False,
+) -> list[tuple[Task, TriageResult]]:
     """Classify each issue, post skip comments for SKIPs, return sorted pairs.
 
     Sort order:
@@ -207,13 +209,15 @@ def triage_batch(issues: list[Task], cfg: Config) -> list[tuple[Task, TriageResu
 
     Skip-comment posting is best-effort: any exception raised by
     post_skip_comment is logged and swallowed so the rest of the batch
-    continues to be classified.
+    continues to be classified. When dry_run=True, classification still
+    runs but skip comments are NOT posted to GitHub — preserves dry-run's
+    "no external side effects" contract.
     """
     results: list[tuple[Task, TriageResult]] = []
     for task in issues:
         tr = classify(task, cfg)
         results.append((task, tr))
-        if tr.outcome == "SKIP":
+        if tr.outcome == "SKIP" and not dry_run:
             try:
                 post_skip_comment(task.repo_slug, task.issue_number, tr.reason)
             except Exception as exc:  # noqa: BLE001 — batch must keep going
@@ -223,6 +227,11 @@ def triage_batch(issues: list[Task], cfg: Config) -> list[tuple[Task, TriageResu
                     task.issue_number,
                     exc,
                 )
+        elif tr.outcome == "SKIP" and dry_run:
+            logger.info(
+                "dry-run: would have posted skip comment on %s#%s (reason=%s)",
+                task.repo_slug, task.issue_number, tr.reason,
+            )
 
     results.sort(key=lambda pair: (_OUTCOME_RANK[pair[1].outcome], -pair[1].priority))
     return results

@@ -448,7 +448,7 @@ def test_run_batch_dispatches_doable_to_process_task(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2, t3])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t1, _make_triage_result(t1, "DOABLE", 80)),
             (t3, _make_triage_result(t3, "NEED_INPUT", 40, "what API?")),
             (t2, _make_triage_result(t2, "SKIP", 0, "too vague")),
@@ -487,7 +487,7 @@ def test_run_batch_skip_not_passed_to_process_task(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t1, _make_triage_result(t1, "SKIP", 0, "out of scope")),
             (t2, _make_triage_result(t2, "SKIP", 0, "design needed")),
         ],
@@ -518,7 +518,7 @@ def test_run_batch_ordering_respected(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2, t3])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t2, _make_triage_result(t2, "DOABLE", 90)),
             (t3, _make_triage_result(t3, "DOABLE", 50)),
             (t1, _make_triage_result(t1, "SKIP", 0)),
@@ -551,7 +551,7 @@ def test_run_batch_wallclock_aborts_batch(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t1, _make_triage_result(t1, "DOABLE", 80)),
             (t2, _make_triage_result(t2, "DOABLE", 70)),
         ],
@@ -602,7 +602,7 @@ def test_run_batch_individual_task_failure_continues_batch(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t1, _make_triage_result(t1, "DOABLE", 90)),
             (t2, _make_triage_result(t2, "DOABLE", 80)),
         ],
@@ -637,7 +637,7 @@ def test_run_batch_dry_run_forwards_flag(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [(t1, _make_triage_result(t1, "DOABLE", 80))],
+        lambda issues, c, **_kw: [(t1, _make_triage_result(t1, "DOABLE", 80))],
     )
 
     captured_kwargs: list[dict[str, Any]] = []
@@ -748,7 +748,7 @@ def test_run_batch_collects_aborted_into_report(
     monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
     monkeypatch.setattr(
         "nocturne.orchestrator.triage_batch",
-        lambda issues, c: [
+        lambda issues, c, **_kw: [
             (t1, _make_triage_result(t1, "DOABLE", 80)),
             (t2, _make_triage_result(t2, "DOABLE", 80)),
         ],
