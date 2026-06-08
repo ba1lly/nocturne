@@ -127,6 +127,7 @@ class RunReport(BaseModel):
     done: list[Task]
     parked: list[ParkedTask]
     skipped: list[tuple[int, str]]
+    aborted: list[Task] = Field(default_factory=list)
     errors: list[str]
     summary: str
     token_usage: int

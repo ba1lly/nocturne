@@ -133,6 +133,9 @@ def _patch_all(
         if raise_in_assert:
             raise GuardrailViolation("worktree on protected base branch")
 
+    def fake_get_issue_state(repo: str, issue: int) -> str:
+        return "OPEN"
+
     monkeypatch.setattr("nocturne.orchestrator.make_worktree", fake_make_worktree)
     monkeypatch.setattr("nocturne.orchestrator.commit_push", fake_commit_push)
     monkeypatch.setattr("nocturne.orchestrator.open_pr", fake_open_pr)
@@ -140,6 +143,7 @@ def _patch_all(
     monkeypatch.setattr("nocturne.orchestrator.opencode_driver.run", fake_run)
     monkeypatch.setattr("nocturne.orchestrator.verifier.verify", fake_verify)
     monkeypatch.setattr("nocturne.guardrails.assert_not_main_branch", fake_assert_not_main)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_issue_state)
     return calls
 
 
@@ -641,3 +645,122 @@ def test_run_batch_dry_run_forwards_flag(
     orchestrator.run_batch(cfg.repos[0], cfg, inmem_store, dry_run=True)
 
     assert captured_kwargs == [{"dry_run": True}]
+
+
+# --------------------------------------------------------------------------------------
+# Task 28: Issue-state abort tests
+# --------------------------------------------------------------------------------------
+
+
+def test_aborts_on_closed_issue(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """When issue is CLOSED at check time, abort without PR."""
+    calls = _patch_all(monkeypatch)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", lambda repo, issue: "CLOSED")
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "aborted"
+    assert len(calls.commit_push) == 0
+    assert len(calls.open_pr) == 0
+    assert len(calls.cleanup) == 1
+
+    persisted = inmem_store.get_task(task.id)
+    assert persisted is not None
+    assert persisted.status == "aborted"
+
+
+def test_404_treated_as_aborted(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """When issue returns 404 (IssueNotFound), treat as aborted."""
+    from nocturne._gh_retry import IssueNotFound
+
+    calls = _patch_all(monkeypatch)
+
+    def fake_get_state(repo: str, issue: int) -> str:
+        raise IssueNotFound("not found")
+
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_state)
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "aborted"
+    assert len(calls.commit_push) == 0
+    assert len(calls.open_pr) == 0
+    assert len(calls.cleanup) == 1
+
+    persisted = inmem_store.get_task(task.id)
+    assert persisted is not None
+    assert persisted.status == "aborted"
+
+
+def test_open_proceeds_to_pr(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """When issue is OPEN, proceed with commit and PR."""
+    calls = _patch_all(monkeypatch)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", lambda repo, issue: "OPEN")
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "done"
+    assert len(calls.commit_push) == 1
+    assert len(calls.open_pr) == 1
+    assert len(calls.cleanup) == 1
+
+    persisted = inmem_store.get_task(task.id)
+    assert persisted is not None
+    assert persisted.status == "done"
+
+
+def test_gh_failure_defaults_to_open(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """When get_issue_state raises GhError (transient), default to OPEN and proceed."""
+    from nocturne._gh_retry import GhRateLimited
+
+    calls = _patch_all(monkeypatch)
+
+    def fake_get_state(repo: str, issue: int) -> str:
+        raise GhRateLimited("rate limited")
+
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_state)
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "done"
+    assert len(calls.commit_push) == 1
+    assert len(calls.open_pr) == 1
+
+    persisted = inmem_store.get_task(task.id)
+    assert persisted is not None
+    assert persisted.status == "done"
+
+
+def test_run_batch_collects_aborted_into_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_worktree: Path, cfg: Config, inmem_store: Store
+) -> None:
+    """run_batch collects aborted tasks into RunReport.aborted."""
+    t1 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#1").model_copy(update={"issue_number": 1})
+    t2 = _make_task(tmp_worktree, task_id="ba1lly/nocturne-playground#2").model_copy(update={"issue_number": 2})
+
+    monkeypatch.setattr("nocturne.orchestrator.fetch_eligible", lambda repo_cfg: [t1, t2])
+    monkeypatch.setattr(
+        "nocturne.orchestrator.triage_batch",
+        lambda issues, c: [
+            (t1, _make_triage_result(t1, "DOABLE", 80)),
+            (t2, _make_triage_result(t2, "DOABLE", 80)),
+        ],
+    )
+
+    def fake_process(task: Task, c: Config, store: Store, *, dry_run: bool = False) -> Task:
+        if task.id == t1.id:
+            store.update_status(task.id, "aborted")
+            task.status = "aborted"
+        else:
+            store.update_status(task.id, "done")
+            task.status = "done"
+        return task
+
+    monkeypatch.setattr("nocturne.orchestrator.process_task", fake_process)
+
+    report = orchestrator.run_batch(cfg.repos[0], cfg, inmem_store)
+
+    assert len(report.done) == 1
+    assert report.done[0].id == t2.id
+    assert len(report.aborted) == 1
+    assert report.aborted[0].id == t1.id

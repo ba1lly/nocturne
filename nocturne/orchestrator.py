@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nocturne import gitwork, opencode_driver, verifier
+from nocturne._gh_retry import GhError, IssueNotFound
 from nocturne._logging import get_logger
 from nocturne.config import Config, RepoConfig
 from nocturne.guardrails import (
@@ -14,7 +15,7 @@ from nocturne.guardrails import (
 )
 from nocturne.gitwork import branch_name, commit_push, make_worktree, open_pr
 from nocturne.models import OpenCodeResult, ParkedTask, RunReport, Task, TriageResult
-from nocturne.sources.github_issues import fetch_eligible
+from nocturne.sources.github_issues import fetch_eligible, get_issue_state
 from nocturne.store import Store
 from nocturne.triage import triage_batch
 
@@ -119,6 +120,24 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     )
                     continue
 
+                # Task 28: issue-state check between OpenCode exit and PR creation
+                # Metis directive: prevents creating PRs against issues closed mid-execution
+                try:
+                    issue_state = get_issue_state(task.repo_slug, task.issue_number)
+                except IssueNotFound:
+                    log.info("Issue #%s not found (404); treating as aborted", task.issue_number)
+                    issue_state = "CLOSED"
+                except GhError as e:
+                    log.warning("could not check issue state (defaulting to OPEN): %s", e)
+                    issue_state = "OPEN"  # on transient gh failure, proceed (idempotent open_pr handles dup)
+
+                if issue_state == "CLOSED":
+                    store.update_status(task.id, "aborted")
+                    task.status = "aborted"
+                    log.info("Issue #%s closed during execution; aborting without PR", task.issue_number)
+                    success = True  # mark for cleanup branch; treat as graceful exit
+                    break  # exit the attempt loop; finally cleanup still runs
+
                 # Success path.
                 if not dry_run:
                     commit_push(wt, f"closes #{task.issue_number}: {task.title}")
@@ -200,6 +219,7 @@ def run_batch(
     done: list[Task] = []
     parked: list[ParkedTask] = []
     skipped: list[tuple[int, str]] = []
+    aborted: list[Task] = []
     errors: list[str] = []
 
     try:
@@ -214,6 +234,7 @@ def run_batch(
             done=[],
             parked=[],
             skipped=[],
+            aborted=[],
             errors=errors,
             summary="",
             token_usage=0,
@@ -233,6 +254,7 @@ def run_batch(
             done=[],
             parked=[],
             skipped=[],
+            aborted=[],
             errors=errors,
             summary="",
             token_usage=0,
@@ -255,6 +277,8 @@ def run_batch(
 
         if status == "done":
             done.append(store.get_task(task.id) or task)
+        elif status == "aborted":
+            aborted.append(store.get_task(task.id) or task)
         elif status == "parked":
             base = task.model_dump()
             base.pop("question", None)
@@ -276,6 +300,7 @@ def run_batch(
         done=done,
         parked=parked,
         skipped=skipped,
+        aborted=aborted,
         errors=errors,
         summary="",
         token_usage=0,
