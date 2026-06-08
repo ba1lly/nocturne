@@ -92,9 +92,10 @@ echo ""
 # ============================================================================
 
 echo "=== Step 1: Pre-state Cleanup ==="
-gh pr list --repo "$REPO" --search "head:nocturne/issue-${ISSUE}" --state open --json url --jq '.[].url' \
+gh pr list --repo "$REPO" --state open --json url,headRefName \
+    --jq ".[] | select(.headRefName | startswith(\"nocturne/issue-${ISSUE}-\")) | .url" \
     | xargs -r -I{} gh pr close {} --delete-branch 2>/dev/null || true
-echo "✓ Cleaned up any prior nocturne/issue-${ISSUE} PRs"
+echo "✓ Cleaned up any prior nocturne/issue-${ISSUE}-* PRs"
 echo "" > "$EVIDENCE_DIR/milestone-M1-precleanup.log"
 
 # ============================================================================
@@ -123,12 +124,13 @@ echo ""
 # ============================================================================
 
 echo "=== Step 3: Assert PR Created ==="
-PR_JSON=$(gh pr list --repo "$REPO" --search "head:nocturne/issue-${ISSUE}" --state open \
-                      --json url,body,state,number,headRefName --jq '.[0]')
+PR_JSON=$(gh pr list --repo "$REPO" --state open \
+                      --json url,body,state,number,headRefName \
+                      --jq "[.[] | select(.headRefName | startswith(\"nocturne/issue-${ISSUE}-\"))] | .[0]")
 echo "$PR_JSON" > "$EVIDENCE_DIR/milestone-M1-pr.json"
 
 if [ -z "$PR_JSON" ] || [ "$PR_JSON" = "null" ]; then
-    echo "FAIL: no PR created for nocturne/issue-${ISSUE}"
+    echo "FAIL: no PR created with head matching nocturne/issue-${ISSUE}-*"
     exit 1
 fi
 
