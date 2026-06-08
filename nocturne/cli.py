@@ -438,6 +438,117 @@ def soul_edit() -> None:
     typer.echo(f"Edited {dest}")
 
 
+# Skill subcommand group
+skill_app = typer.Typer(name="skill", help="Manage OpenCode skills used by Nocturne")
+app.add_typer(skill_app, name="skill")
+
+
+@skill_app.command(name="install")
+def skill_install(
+    source: str = typer.Argument(..., help="URL, file path, or directory"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing skill"),
+) -> None:
+    """Install a skill from URL, local file, or local directory."""
+    from nocturne.skills import install_skill, SkillExists, SkillInvalid, SkillError
+
+    try:
+        name = install_skill(source, force=force)
+        typer.echo(f"Installed: {name}")
+    except SkillExists as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(2)
+    except SkillInvalid as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(2)
+    except SkillError as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(1)
+
+
+@skill_app.command(name="list")
+def skill_list() -> None:
+    """List all installed skills."""
+    from nocturne.skills import list_skills
+    from rich.console import Console
+    from rich.table import Table
+
+    skills = list_skills()
+    if not skills:
+        typer.echo("(no skills installed)")
+        return
+    table = Table(title=f"Installed skills ({len(skills)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description", style="white")
+    table.add_column("Enabled", style="green")
+    for s in skills:
+        table.add_row(s.name, s.description[:60], "yes" if s.enabled else "no")
+    Console().print(table)
+
+
+@skill_app.command(name="enable")
+def skill_enable(name: str = typer.Argument(...)) -> None:
+    """Re-enable a previously disabled skill."""
+    from nocturne.skills import enable_skill, SkillNotFound
+
+    try:
+        enable_skill(name)
+        typer.echo(f"Enabled: {name}")
+    except SkillNotFound as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(1)
+
+
+@skill_app.command(name="disable")
+def skill_disable(name: str = typer.Argument(...)) -> None:
+    """Disable a skill (OpenCode will skip it)."""
+    from nocturne.skills import disable_skill, SkillNotFound
+
+    try:
+        disable_skill(name)
+        typer.echo(f"Disabled: {name}")
+    except SkillNotFound as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(1)
+
+
+@skill_app.command(name="info")
+def skill_info(name: str = typer.Argument(...)) -> None:
+    """Show details for an installed skill."""
+    from nocturne.skills import list_skills
+
+    skills = list_skills()
+    s = next((x for x in skills if x.name == name), None)
+    if s is None:
+        typer.secho(f"ERROR: skill not found: {name}", fg="red", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Name: {s.name}")
+    typer.echo(f"Description: {s.description}")
+    typer.echo(f"Source: {s.source}")
+    typer.echo(f"Installed: {s.installed_at}")
+    typer.echo(f"Enabled: {s.enabled}")
+
+
+@skill_app.command(name="uninstall")
+def skill_uninstall(
+    name: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Uninstall a skill (removes the skill directory)."""
+    from nocturne.skills import uninstall_skill, SkillNotFound
+
+    if not yes:
+        confirm = typer.confirm(f"Uninstall skill '{name}'?", default=False)
+        if not confirm:
+            typer.echo("Aborted.")
+            return
+    try:
+        uninstall_skill(name)
+        typer.echo(f"Uninstalled: {name}")
+    except SkillNotFound as e:
+        typer.secho(f"ERROR: {e}", fg="red", err=True)
+        raise typer.Exit(1)
+
+
 @app.command()
 def resume(
     task_id: str | None = typer.Option(None, "--task-id", "-t", help="Parked task id (e.g., owner/repo#123)"),
