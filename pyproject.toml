@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nocturne"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "langgraph",
+  "langgraph-checkpoint-sqlite",
+  "openai",
+  "discord.py",
+  "pydantic>=2",
+  "pydantic-settings",
+  "pyyaml",
+  "rich",
+  "typer",
+  "jinja2",
+  "aiohttp",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "pytest-mock",
+  "responses",
+  "ruff",
+  "mypy",
+  "coverage",
+]
+
+[project.scripts]
+nocturne = "nocturne.cli:app"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nocturne"]

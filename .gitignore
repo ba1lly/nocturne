@@ -1,0 +1,5 @@
+nocturne.db
+.venv/
+/tmp/nocturne/
+reports/
+.omo/evidence/
