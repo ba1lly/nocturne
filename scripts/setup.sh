@@ -1,19 +1,63 @@
 #!/usr/bin/env bash
 # Nocturne interactive setup — writes ~/.config/nocturne/config.yaml
+#
+# Note: this script writes ENV VAR NAMES (not values) into config.yaml.
+# The actual API keys and Discord bot token MUST be exported in your shell
+# (or stored in ~/.config/nocturne/env for systemd, prompted optionally below).
 set -euo pipefail
 
-# Defaults
+REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+NOCTURNE_BIN="$REPO_ROOT/.venv/bin/nocturne"
+
+# -- Defaults --
 OWNER=""
 SANDBOX_REPO="nocturne-playground"
 DISCORD_CHANNEL="0"
 DISCORD_USER="0"
-API_KEY_ENV="DASHSCOPE_API_KEY"
+PROVIDER="alibaba-coding-plan"
+API_KEY_ENV=""        # auto-set per provider
+REASONING_MODEL=""
+CODING_MODEL=""
+REPORT_MODEL=""
 CONFIG_DIR="$HOME/.config/nocturne"
 NON_INTERACTIVE=false
 FORCE=false
 INSTALL_REVIEWER=false
+WRITE_ENV_FILE=false   # writes ~/.config/nocturne/env (KEY=VALUE pairs for systemd)
 
-# Parse args
+# -- Provider catalog (name|base_url|api_key_env|reasoning|coding|report) --
+declare -A PROVIDER_BASE_URL=(
+  [alibaba-coding-plan]="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  [anthropic]="https://api.anthropic.com/v1"
+  [openai]="https://api.openai.com/v1"
+  [kimi]="https://api.moonshot.cn/v1"
+  [glm]="https://open.bigmodel.cn/api/paas/v4"
+)
+declare -A PROVIDER_ENV=(
+  [alibaba-coding-plan]="DASHSCOPE_API_KEY"
+  [anthropic]="ANTHROPIC_API_KEY"
+  [openai]="OPENAI_API_KEY"
+  [kimi]="MOONSHOT_API_KEY"
+  [glm]="ZHIPUAI_API_KEY"
+)
+declare -A PROVIDER_REASONING=(
+  [alibaba-coding-plan]="qwen3.6-plus"
+  [anthropic]="claude-opus-4-5"
+  [openai]="gpt-5"
+  [kimi]="moonshot-v1-32k"
+  [glm]="glm-4.6"
+)
+declare -A PROVIDER_CODING=(
+  [alibaba-coding-plan]="qwen3-coder-plus"
+  [anthropic]="claude-sonnet-4-5"
+  [openai]="gpt-5"
+  [kimi]="moonshot-v1-32k"
+  [glm]="glm-4.6"
+)
+
+PROVIDER_ORDER=(alibaba-coding-plan anthropic openai kimi glm)
+
+# -- Parse args --
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive) NON_INTERACTIVE=true; shift ;;
@@ -22,112 +66,288 @@ while [[ $# -gt 0 ]]; do
     --sandbox-repo) SANDBOX_REPO="$2"; shift 2 ;;
     --discord-channel) DISCORD_CHANNEL="$2"; shift 2 ;;
     --discord-user) DISCORD_USER="$2"; shift 2 ;;
+    --provider) PROVIDER="$2"; shift 2 ;;
     --api-key-env) API_KEY_ENV="$2"; shift 2 ;;
+    --reasoning-model) REASONING_MODEL="$2"; shift 2 ;;
+    --coding-model) CODING_MODEL="$2"; shift 2 ;;
+    --report-model) REPORT_MODEL="$2"; shift 2 ;;
     --config-dir) CONFIG_DIR="$2"; shift 2 ;;
+    --install-reviewer) INSTALL_REVIEWER=true; shift ;;
+    --write-env-file) WRITE_ENV_FILE=true; shift ;;
     -h|--help)
       cat <<EOF
 Usage: setup.sh [options]
+
   --non-interactive       Don't prompt; use provided/default values
   --force                 Overwrite existing config
   --owner OWNER           GitHub owner (required)
   --sandbox-repo NAME     Sandbox repo name (default: nocturne-playground)
-  --discord-channel ID    Discord channel ID (required for daemon)
-  --discord-user ID       Discord mention user ID (required for daemon)
-  --api-key-env NAME      Env var name holding the provider API key (default: DASHSCOPE_API_KEY)
+  --provider NAME         One of: alibaba-coding-plan | anthropic | openai | kimi | glm
+  --api-key-env NAME      Override the env var name (default depends on provider)
+  --reasoning-model X     Override the reasoning model (default depends on provider)
+  --coding-model X        Override the coding model (default depends on provider)
+  --report-model X        Override the report model (default: same as reasoning)
+  --discord-channel ID    Discord channel ID (required for Discord HITL)
+  --discord-user ID       Discord mention user ID (required for Discord HITL)
+  --install-reviewer      Install ~/.agents/skills/reviewer/ after writing config
+  --write-env-file        Prompt to write ~/.config/nocturne/env (for systemd)
   --config-dir PATH       Config dir (default: ~/.config/nocturne)
+
+This script writes ENV VAR NAMES (e.g. "DASHSCOPE_API_KEY") to config.yaml.
+The actual TOKENS / KEYS must be exported in your shell, or stored in
+~/.config/nocturne/env (KEY=VALUE pairs, used by the systemd unit).
 EOF
       exit 0
       ;;
-    *) echo "Unknown arg: $1"; exit 2 ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-# Interactive prompts (only if not --non-interactive)
+# -- Interactive prompts --
 if ! $NON_INTERACTIVE; then
-  echo "=== Nocturne Setup ==="
+  echo ""
+  echo "================================================================"
+  echo "  Nocturne Setup"
+  echo "================================================================"
+  echo ""
+  echo "This wizard will generate ~/.config/nocturne/config.yaml."
+  echo "Note: API keys + Discord token live in your SHELL ENV, NOT this file."
+  echo ""
+
+  # 1. GitHub owner
   if [ -z "$OWNER" ]; then
-    read -rp "GitHub owner: " OWNER
+    read -rp "GitHub owner (your username or org): " OWNER
+    while [ -z "$OWNER" ]; do
+      read -rp "  → required. GitHub owner: " OWNER
+    done
   fi
+
+  # 2. Sandbox repo
   read -rp "Sandbox repo name [$SANDBOX_REPO]: " input
   SANDBOX_REPO="${input:-$SANDBOX_REPO}"
-  read -rp "Discord channel ID (or 0 to skip) [$DISCORD_CHANNEL]: " input
-  DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
-  read -rp "Discord mention user ID (or 0 to skip) [$DISCORD_USER]: " input
-  DISCORD_USER="${input:-$DISCORD_USER}"
-  read -rp "Provider API key env var name [$API_KEY_ENV]: " input
-  API_KEY_ENV="${input:-$API_KEY_ENV}"
-  
-  read -rp "Install reviewer skill from ~/.agents/skills/reviewer/? [y/N]: " input
-  if [[ "$input" =~ ^[Yy]$ ]]; then
-    INSTALL_REVIEWER=true
+
+  # 3. Provider menu
+  echo ""
+  echo "Choose your LLM provider:"
+  i=1
+  for p in "${PROVIDER_ORDER[@]}"; do
+    echo "  $i) $p  →  env: ${PROVIDER_ENV[$p]}, reasoning: ${PROVIDER_REASONING[$p]}, coding: ${PROVIDER_CODING[$p]}"
+    i=$((i+1))
+  done
+  read -rp "Provider [1=$PROVIDER]: " input
+  if [ -n "$input" ] && [[ "$input" =~ ^[0-9]+$ ]]; then
+    idx=$((input-1))
+    if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PROVIDER_ORDER[@]}" ]; then
+      PROVIDER="${PROVIDER_ORDER[$idx]}"
+    fi
   fi
+
+  # 4. Optional model overrides
+  echo ""
+  echo "Defaults for $PROVIDER:"
+  echo "  reasoning: ${PROVIDER_REASONING[$PROVIDER]}"
+  echo "  coding:    ${PROVIDER_CODING[$PROVIDER]}"
+  read -rp "Override reasoning model [${PROVIDER_REASONING[$PROVIDER]}]: " input
+  REASONING_MODEL="${input:-${PROVIDER_REASONING[$PROVIDER]}}"
+  read -rp "Override coding model [${PROVIDER_CODING[$PROVIDER]}]: " input
+  CODING_MODEL="${input:-${PROVIDER_CODING[$PROVIDER]}}"
+  read -rp "Override report model [$REASONING_MODEL]: " input
+  REPORT_MODEL="${input:-$REASONING_MODEL}"
+
+  # 5. Discord — explicit guidance
+  echo ""
+  echo "Discord HITL (parked-task notifications + slash commands):"
+  echo "  This script writes only the channel ID + user ID + env var NAME"
+  echo "  to config.yaml. You MUST export NOCTURNE_DISCORD_TOKEN in your shell"
+  echo "  separately (e.g. add it to ~/.bashrc) — or skip Discord entirely by"
+  echo "  leaving channel/user as 0."
+  echo ""
+  read -rp "Discord channel ID (0 to skip Discord) [$DISCORD_CHANNEL]: " input
+  DISCORD_CHANNEL="${input:-$DISCORD_CHANNEL}"
+  read -rp "Discord mention user ID (0 to skip) [$DISCORD_USER]: " input
+  DISCORD_USER="${input:-$DISCORD_USER}"
+
+  # 6. Reviewer skill
+  if [ -d "$HOME/.agents/skills/reviewer" ]; then
+    read -rp "Install reviewer skill from ~/.agents/skills/reviewer/? [y/N]: " input
+    [[ "$input" =~ ^[Yy]$ ]] && INSTALL_REVIEWER=true
+  fi
+
+  # 7. Optional env file (for systemd)
+  echo ""
+  echo "Optionally, write ~/.config/nocturne/env (KEY=VALUE pairs) for the systemd unit"
+  echo "to pick up via EnvironmentFile. This file will contain ACTUAL TOKENS — be sure"
+  echo "your home dir is private (chmod 700 ~/.config/nocturne)."
+  read -rp "Write env file with actual tokens? [y/N]: " input
+  [[ "$input" =~ ^[Yy]$ ]] && WRITE_ENV_FILE=true
 fi
 
-# Validate
+# -- Resolve API_KEY_ENV from provider if not explicitly set --
+if [ -z "$API_KEY_ENV" ]; then
+  API_KEY_ENV="${PROVIDER_ENV[$PROVIDER]:-DASHSCOPE_API_KEY}"
+fi
+if [ -z "$REASONING_MODEL" ]; then
+  REASONING_MODEL="${PROVIDER_REASONING[$PROVIDER]:-qwen3.6-plus}"
+fi
+if [ -z "$CODING_MODEL" ]; then
+  CODING_MODEL="${PROVIDER_CODING[$PROVIDER]:-qwen3-coder-plus}"
+fi
+if [ -z "$REPORT_MODEL" ]; then
+  REPORT_MODEL="$REASONING_MODEL"
+fi
+
+# -- Validate --
 if [ -z "$OWNER" ]; then
   echo "ERROR: --owner is required" >&2
   exit 2
 fi
+if [ -z "${PROVIDER_BASE_URL[$PROVIDER]:-}" ]; then
+  echo "ERROR: unknown provider: $PROVIDER" >&2
+  echo "Valid: ${PROVIDER_ORDER[*]}" >&2
+  exit 2
+fi
 
-# Create config dir
+# -- Create config dir --
 mkdir -p "$CONFIG_DIR"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 
-# Check for existing config
 if [ -f "$CONFIG_FILE" ] && ! $FORCE; then
   echo "ERROR: $CONFIG_FILE already exists (pass --force to overwrite)" >&2
   exit 2
 fi
 
-# Substitute into config.example.yaml using sed
-REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
-EXAMPLE="$REPO_ROOT/config.example.yaml"
+PROVIDER_BASE_URL_VAL="${PROVIDER_BASE_URL[$PROVIDER]}"
 
-if [ ! -f "$EXAMPLE" ]; then
-  echo "ERROR: config.example.yaml not found at $EXAMPLE" >&2
-  exit 2
-fi
+# -- Write config.yaml from scratch (cleaner than sed on the multi-provider example) --
+cat > "$CONFIG_FILE" <<EOF
+# Nocturne configuration — generated by scripts/setup.sh
+github:
+  owner: "$OWNER"
 
-sed \
-  -e "s|owner: \"ba1lly\"|owner: \"$OWNER\"|" \
-  -e "s|repo_name: \"nocturne-playground\"|repo_name: \"$SANDBOX_REPO\"|" \
-  -e "s|channel_id: 0|channel_id: $DISCORD_CHANNEL|" \
-  -e "s|mention_user_id: 0|mention_user_id: $DISCORD_USER|" \
-  -e "s|api_key_env: \"DASHSCOPE_API_KEY\"|api_key_env: \"$API_KEY_ENV\"|" \
-  -e "s|ba1lly/nocturne-playground|$OWNER/$SANDBOX_REPO|g" \
-  "$EXAMPLE" > "$CONFIG_FILE"
+sandbox:
+  repo_name: "$SANDBOX_REPO"
+  checkout_path: "~/projects/${SANDBOX_REPO}-checkout"
 
-# Install reviewer skill if requested
+providers:
+  $PROVIDER:
+    base_url: "$PROVIDER_BASE_URL_VAL"
+    api_key_env: "$API_KEY_ENV"
+
+models:
+  reasoning: "$PROVIDER/$REASONING_MODEL"
+  report: "$PROVIDER/$REPORT_MODEL"
+  coding: "$PROVIDER/$CODING_MODEL"
+
+opencode:
+  command: "opencode"
+  timeout_min: 25
+  worktree_root: "/tmp/nocturne"
+
+repos:
+  - slug: "$OWNER/$SANDBOX_REPO"
+    checkout_path: "~/projects/${SANDBOX_REPO}-checkout"
+    label: "agent"
+    base: "main"
+    verify_cmd: "pytest -q"
+    require_new_test: true
+
+guardrails:
+  max_attempts: 3
+  per_task_timeout_min: 25
+  global_wallclock_hours: 8
+  token_budget: 2_000_000
+  allow_force_push: false
+  allow_auto_merge: false
+
+discord:
+  enabled: true
+  bot_token_env: "NOCTURNE_DISCORD_TOKEN"
+  channel_id: $DISCORD_CHANNEL
+  mention_user_id: $DISCORD_USER
+
+daemon:
+  poll_interval_sec: 300
+  quiet_hours: []
+
+review:
+  enabled: true
+  budget_attempts: 2
+  severity_floor: "info"
+  skill_name: "reviewer"
+  append_only: true
+
+healthcheck:
+  enabled: true
+  bind_host: "127.0.0.1"
+  bind_port: 8765
+  staleness_factor: 2
+
+persona:
+  enabled: true
+  soul_path: "~/.config/nocturne/soul.md"
+EOF
+
+chmod 600 "$CONFIG_FILE"
+
+# -- Install reviewer skill if requested --
 if $INSTALL_REVIEWER; then
   SKILL_PATH="$HOME/.agents/skills/reviewer"
   if [ -d "$SKILL_PATH" ]; then
+    echo ""
     echo "Installing reviewer skill..."
-    nocturne skill install "$SKILL_PATH"
+    if [ -x "$NOCTURNE_BIN" ]; then
+      "$NOCTURNE_BIN" skill install "$SKILL_PATH" || \
+        echo "  (skill install failed — install manually with: $NOCTURNE_BIN skill install $SKILL_PATH)"
+    else
+      echo "  ⚠ $NOCTURNE_BIN not found — install nocturne first (pip install -e .[dev])"
+      echo "    then run: $NOCTURNE_BIN skill install $SKILL_PATH"
+    fi
   else
-    echo "Warning: Reviewer skill not found at $SKILL_PATH. Skipping installation."
+    echo "  ⚠ Reviewer skill not at $SKILL_PATH — skipping"
   fi
 fi
 
-# Validate env vars
-WARNINGS=()
-if [ -z "${!API_KEY_ENV:-}" ]; then
-  WARNINGS+=("$API_KEY_ENV not set in environment")
-fi
-if [ -z "${NOCTURNE_DISCORD_TOKEN:-}" ]; then
-  WARNINGS+=("NOCTURNE_DISCORD_TOKEN not set in environment")
+# -- Optional ~/.config/nocturne/env writer (for systemd) --
+ENV_FILE="$CONFIG_DIR/env"
+if $WRITE_ENV_FILE && ! $NON_INTERACTIVE; then
+  echo ""
+  echo "Writing ~/.config/nocturne/env (KEY=VALUE pairs for systemd):"
+  read -srp "  $API_KEY_ENV value (input hidden, leave blank to skip): " API_VAL
+  echo ""
+  read -srp "  NOCTURNE_DISCORD_TOKEN value (input hidden, leave blank to skip): " DISCORD_VAL
+  echo ""
+  {
+    [ -n "$API_VAL" ]     && echo "$API_KEY_ENV=$API_VAL"
+    [ -n "$DISCORD_VAL" ] && echo "NOCTURNE_DISCORD_TOKEN=$DISCORD_VAL"
+  } > "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  echo "  → wrote $ENV_FILE (mode 600)"
 fi
 
-# Summary
+# -- Validate env vars in current shell --
+WARNINGS=()
+if [ -z "${!API_KEY_ENV:-}" ]; then
+  WARNINGS+=("$API_KEY_ENV not set in environment — export it in your shell")
+fi
+if [ "$DISCORD_CHANNEL" != "0" ] && [ -z "${NOCTURNE_DISCORD_TOKEN:-}" ]; then
+  WARNINGS+=("NOCTURNE_DISCORD_TOKEN not set — Discord won't connect until you export it")
+fi
+
+# -- Summary --
 echo ""
-echo "=== Setup Complete ==="
-echo "Config written to: $CONFIG_FILE"
+echo "================================================================"
+echo "  Setup Complete"
+echo "================================================================"
 echo ""
-echo "Settings:"
-echo "  GitHub owner: $OWNER"
-echo "  Sandbox repo: $OWNER/$SANDBOX_REPO"
+echo "Config: $CONFIG_FILE"
+echo ""
+echo "  GitHub owner:    $OWNER"
+echo "  Sandbox repo:    $OWNER/$SANDBOX_REPO"
+echo "  Provider:        $PROVIDER  (env: $API_KEY_ENV)"
+echo "  Reasoning model: $PROVIDER/$REASONING_MODEL"
+echo "  Coding model:    $PROVIDER/$CODING_MODEL"
 echo "  Discord channel: $DISCORD_CHANNEL"
-echo "  Discord user: $DISCORD_USER"
-echo "  API key env: $API_KEY_ENV"
+echo "  Discord user:    $DISCORD_USER"
 echo ""
 if [ ${#WARNINGS[@]} -gt 0 ]; then
   echo "Warnings:"
@@ -137,7 +357,16 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
   echo ""
 fi
 echo "Next steps:"
-echo "  1. Set required env vars (see warnings above)"
-echo "  2. Bootstrap sandbox: GITHUB_OWNER=$OWNER SANDBOX_REPO=$SANDBOX_REPO bash scripts/bootstrap_sandbox.sh"
-echo "  3. First run: nocturne run-once --repo $OWNER/$SANDBOX_REPO --issue 1"
-echo "  4. Continuous: nocturne daemon"
+echo "  1. Export env vars in your shell (if warnings above):"
+echo "       export $API_KEY_ENV='<your-key>'"
+if [ "$DISCORD_CHANNEL" != "0" ]; then
+  echo "       export NOCTURNE_DISCORD_TOKEN='<your-bot-token>'"
+fi
+echo "  2. Verify provider/model registered with OpenCode:"
+echo "       bash $REPO_ROOT/scripts/check_opencode_provider.sh"
+echo "  3. Bootstrap sandbox:"
+echo "       GITHUB_OWNER=$OWNER SANDBOX_REPO=$SANDBOX_REPO bash $REPO_ROOT/scripts/bootstrap_sandbox.sh"
+echo "  4. First run:"
+echo "       $NOCTURNE_BIN run-once --repo $OWNER/$SANDBOX_REPO --issue 1"
+echo "  5. Continuous daemon:"
+echo "       $NOCTURNE_BIN daemon"
