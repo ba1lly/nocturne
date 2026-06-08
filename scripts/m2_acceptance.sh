@@ -94,7 +94,8 @@ echo ""
 echo "=== Step 1: Pre-state Cleanup ==="
 
 # Close any open PRs from prior runs on issues 1, 2, 5
-gh pr list --repo "$REPO" --search "head:nocturne/issue-" --state open --json url --jq '.[].url' \
+gh pr list --repo "$REPO" --state open --json url,headRefName \
+    --jq '.[] | select(.headRefName | startswith("nocturne/issue-")) | .url' \
     | xargs -r -I{} gh pr close {} --delete-branch 2>/dev/null || true
 echo "✓ Cleaned up any prior nocturne/issue-* PRs"
 
@@ -162,8 +163,9 @@ echo ""
 # ============================================================================
 
 echo "=== Step 4: Assert PRs for at least 2 DOABLE issues ==="
-PR_LIST=$(gh pr list --repo "$REPO" --search "head:nocturne/issue-" --state open \
-    --json url,headRefName,number)
+PR_LIST=$(gh pr list --repo "$REPO" --state open \
+    --json url,headRefName,number \
+    --jq '[.[] | select(.headRefName | startswith("nocturne/issue-"))]')
 echo "$PR_LIST" > "$EVIDENCE_DIR/milestone-M2-prs.json"
 
 PR_COUNT=$(echo "$PR_LIST" | jq 'length')
@@ -182,7 +184,8 @@ echo ""
 # ============================================================================
 
 echo "=== Step 5: Assert no PR for Issue #4 ==="
-PR4_COUNT=$(gh pr list --repo "$REPO" --search "head:nocturne/issue-4" --state open --json url --jq 'length')
+PR4_COUNT=$(gh pr list --repo "$REPO" --state open --json headRefName \
+    --jq '[.[] | select(.headRefName | startswith("nocturne/issue-4-"))] | length')
 
 if [ "$PR4_COUNT" != "0" ]; then
     echo "FAIL: PR exists for SKIP issue #4 (expected 0, got $PR4_COUNT)"
