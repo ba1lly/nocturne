@@ -17,6 +17,8 @@ class _Store(Protocol):
     def get_task(self, task_id: str) -> Task | None: ...
     def update_status(self, task_id: str, status: str) -> None: ...
     def update_pid(self, task_id: str, pid: int | None) -> None: ...
+    def update_pr_url(self, task_id: str, pr_url: str | None) -> None: ...
+    def increment_attempts(self, task_id: str) -> None: ...
     def list_by_status(self, status: str) -> list[Task]: ...
     def park_task(self, task_id: str, question: str) -> None: ...
     def resume_task(self, task_id: str, answer: str) -> None: ...
@@ -127,6 +129,42 @@ def test_update_pid_persists_and_clears(tmp_path: Path) -> None:
         updated = store.get_task(task.id)
         assert updated is not None
         assert updated.opencode_pid is None
+    finally:
+        store.close()
+
+
+def test_update_pr_url_persists_and_clears(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        task = _task("r#pr1")
+        store.insert_task(task)
+
+        store.update_pr_url(task.id, "https://github.com/owner/repo/pull/7")
+        updated = store.get_task(task.id)
+        assert updated is not None
+        assert updated.pr_url == "https://github.com/owner/repo/pull/7"
+
+        store.update_pr_url(task.id, None)
+        updated = store.get_task(task.id)
+        assert updated is not None
+        assert updated.pr_url is None
+    finally:
+        store.close()
+
+
+def test_increment_attempts_is_atomic_and_monotonic(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        task = _task("r#att1", attempts=0)
+        store.insert_task(task)
+
+        store.increment_attempts(task.id)
+        store.increment_attempts(task.id)
+        store.increment_attempts(task.id)
+
+        updated = store.get_task(task.id)
+        assert updated is not None
+        assert updated.attempts == 3
     finally:
         store.close()
 

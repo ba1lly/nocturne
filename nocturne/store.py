@@ -73,6 +73,20 @@ class Store:
                 (pid, _now(), task_id),
             )
 
+    def update_pr_url(self, task_id: str, pr_url: str | None) -> None:
+        with self._conn:
+            _ = self._conn.execute(
+                "UPDATE tasks SET pr_url = ?, updated_at = ? WHERE id = ?",
+                (pr_url, _now(), task_id),
+            )
+
+    def increment_attempts(self, task_id: str) -> None:
+        with self._conn:
+            _ = self._conn.execute(
+                "UPDATE tasks SET attempts = attempts + 1, updated_at = ? WHERE id = ?",
+                (_now(), task_id),
+            )
+
     def list_by_status(self, status: TaskStatus) -> list[Task]:
         db_rows = cast(list[sqlite3.Row], self._conn.execute(
             "SELECT * FROM tasks WHERE status = ? ORDER BY created_at, id",
