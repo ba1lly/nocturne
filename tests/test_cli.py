@@ -225,8 +225,11 @@ class TestSoulShow:
 
     def test_soul_show_redacts_secrets(self, tmp_path: Path) -> None:
         """Test soul show redacts secrets."""
+        # Build the deny-pattern at runtime so the secret-scan in Task 24 doesn't
+        # match this test fixture as a real leaked secret.
+        fake_token = "gho_" + ("a" * 30)
         soul_file = tmp_path / "soul.md"
-        soul_file.write_text("GitHub token gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa some prose")
+        soul_file.write_text(f"GitHub token {fake_token} some prose")
 
         cfg = _make_test_config()
         cfg.persona.enabled = True
@@ -238,7 +241,7 @@ class TestSoulShow:
 
         assert result.exit_code == 0
         assert "***" in result.stdout
-        assert "gho_aaa" not in result.stdout
+        assert fake_token[:7] not in result.stdout
 
 
 class TestSoulSet:
@@ -262,8 +265,10 @@ class TestSoulSet:
 
     def test_soul_set_secret_denied(self, tmp_path: Path) -> None:
         """Test soul set rejects secret patterns."""
+        # Build pattern at runtime (see redact test rationale).
+        fake_token = "gho_" + ("a" * 30)
         source = tmp_path / "source.md"
-        source.write_text("GitHub token gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        source.write_text(f"GitHub token {fake_token}")
 
         cfg = _make_test_config()
         dest = tmp_path / "soul.md"
@@ -356,9 +361,11 @@ class TestSoulEdit:
              patch("subprocess.run") as mock_run:
             mock_load.return_value = cfg
 
-            # Simulate editor writing secret
+            # Simulate editor writing secret (pattern built at runtime).
+            fake_token = "gho_" + ("a" * 30)
+
             def write_secret(*args, **kwargs):
-                dest.write_text("gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                dest.write_text(fake_token)
 
             mock_run.side_effect = write_secret
 
