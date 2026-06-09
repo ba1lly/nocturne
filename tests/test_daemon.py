@@ -456,31 +456,35 @@ async def test_poll_loop_unpause_refreshes_health_heartbeat_cross_process(
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _long_cycle():
+    async def _long_cycle() -> dict[str, object]:
         started.set()
         await release.wait()
         return {"fetched": 0, "errors": []}
 
     d.run_one_cycle = _long_cycle  # type: ignore[method-assign]
-    cli_store.set_daemon_flag("paused", "0")
-    runner = asyncio.create_task(d._poll_loop())
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    runner: asyncio.Task[None] | None = None
+    try:
+        cli_store.set_daemon_flag("paused", "0")
+        runner = asyncio.create_task(d._poll_loop())
+        await asyncio.wait_for(started.wait(), timeout=1.0)
 
-    cli_store.set_daemon_flag("paused", "1")
-    await asyncio.sleep(0.25)
-    cli_store.set_daemon_flag("paused", "0")
-    unpaused_at = datetime.now(timezone.utc)
+        cli_store.set_daemon_flag("paused", "1")
+        await asyncio.sleep(0.25)
+        cli_store.set_daemon_flag("paused", "0")
+        unpaused_at = datetime.now(timezone.utc)
 
-    async def _wait_for_heartbeat() -> None:
-        while d.last_poll_at is None or d.last_poll_at < unpaused_at:
-            await asyncio.sleep(0.02)
+        async def _wait_for_heartbeat() -> None:
+            while d.last_poll_at is None or d.last_poll_at < unpaused_at:
+                await asyncio.sleep(0.02)
 
-    await asyncio.wait_for(_wait_for_heartbeat(), timeout=1.0)
-    release.set()
-    d._stop.set()
-    await asyncio.wait_for(runner, timeout=1.0)
-    daemon_store.close()
-    cli_store.close()
+        await asyncio.wait_for(_wait_for_heartbeat(), timeout=1.0)
+    finally:
+        release.set()
+        d._stop.set()
+        if runner is not None:
+            await asyncio.wait_for(runner, timeout=1.0)
+        daemon_store.close()
+        cli_store.close()
 
 
 @pytest.mark.asyncio

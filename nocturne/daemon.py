@@ -318,7 +318,18 @@ class Daemon:
 
             # Normal poll cycle.
             try:
-                await self.run_one_cycle()
+                cycle_task = asyncio.create_task(
+                    self.run_one_cycle(), name="poll_cycle"
+                )
+                while not cycle_task.done():
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(cycle_task), timeout=pause_tick_sec
+                        )
+                    except asyncio.TimeoutError:
+                        if not await self._check_paused_flag():
+                            self._last_poll_at = datetime.now(timezone.utc)
+                _ = cycle_task.result()
             except Exception as e:
                 logger.error("poll cycle raised: %s", e)
                 # Continue iterating despite errors (graceful degradation).
