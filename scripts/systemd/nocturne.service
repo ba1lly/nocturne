@@ -2,6 +2,8 @@
 Description=Nocturne — Autonomous Coding Orchestrator (daemon)
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -9,8 +11,6 @@ ExecStart=%h/projects/nocturne/.venv/bin/nocturne daemon
 WorkingDirectory=%h/projects/nocturne
 Restart=on-failure
 RestartSec=30s
-StartLimitBurst=5
-StartLimitIntervalSec=300
 EnvironmentFile=-%h/.config/nocturne/env
 StandardOutput=journal
 StandardError=journal
