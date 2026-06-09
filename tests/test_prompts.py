@@ -149,15 +149,50 @@ def test_forbidden_actions_section_interpolates_branch() -> None:
     assert "do not switch branches or modify `main`" in out
 
 
-def test_template_includes_self_review_workflow() -> None:
+def test_template_includes_self_review_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression guard for Approach 1 (single-session) architecture:
     the task prompt MUST tell opencode to invoke @reviewer, address every
     finding, and write .nocturne-pr-body.md."""
+    monkeypatch.setattr("nocturne.prompts.render.is_skill_enabled", lambda _name: True)
     out = render_task_prompt(make_task(), make_config())
     assert "@reviewer" in out
     assert ".nocturne-pr-body.md" in out
     assert "every severity" in out or "all findings" in out.lower() or "regardless of severity" in out
     assert "Closes #" in out
+
+
+def test_template_emits_at_reviewer_when_reviewer_skill_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("nocturne.prompts.render.is_skill_enabled", lambda _name: True)
+    out = render_task_prompt(make_task(), make_config())
+    assert "@reviewer" in out
+    assert "/review" not in out
+
+
+def test_template_emits_slash_review_when_reviewer_skill_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("nocturne.prompts.render.is_skill_enabled", lambda _name: False)
+    out = render_task_prompt(make_task(), make_config())
+    assert "/review" in out
+    assert "@reviewer" not in out
+    assert "every severity" in out or "all findings" in out.lower() or "regardless of severity" in out
+    assert ".nocturne-pr-body.md" in out
+
+
+def test_template_skill_detection_queries_reviewer_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queried: list[str] = []
+
+    def spy(name: str) -> bool:
+        queried.append(name)
+        return True
+
+    monkeypatch.setattr("nocturne.prompts.render.is_skill_enabled", spy)
+    _ = render_task_prompt(make_task(), make_config())
+    assert queried == ["reviewer"]
 
 
 def test_template_includes_budget_attempts_from_config() -> None:

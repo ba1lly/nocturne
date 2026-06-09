@@ -624,6 +624,39 @@ def skill_info(name: str = typer.Argument(...)) -> None:
     typer.echo(f"Enabled: {s.enabled}")
 
 
+@skill_app.command(name="install-reviewer")
+def skill_install_reviewer(
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing skill"),
+) -> None:
+    """Install the reviewer skill via fallback chain: local → ba1lly/reviewer-config → Defizoo/reviewer."""
+    from nocturne.config import ReviewConfig
+    from nocturne.skills import install_reviewer_with_fallback
+
+    local_path = Path.home() / ".agents" / "skills" / "reviewer"
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=ReviewConfig().fallback_repos,
+        local_path=local_path,
+        force=force,
+    )
+
+    for attempt in attempts:
+        if attempt.result is not None:
+            label = (
+                "already installed" if attempt.result.status == "already_installed"
+                else f"installed ({attempt.result.status})"
+            )
+            typer.echo(f"  ✓ {attempt.source} → {label}")
+        else:
+            typer.echo(f"  · {attempt.source} → skipped ({attempt.error})")
+
+    if result is None:
+        typer.secho(
+            "No reviewer skill installed; opencode's built-in /review will be used.",
+            fg="yellow",
+        )
+        raise typer.Exit(1)
+
+
 @skill_app.command(name="uninstall")
 def skill_uninstall(
     name: str = typer.Argument(...),

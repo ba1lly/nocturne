@@ -74,6 +74,13 @@ class InstallResult:
     status: InstallStatus
 
 
+@dataclass(frozen=True)
+class ReviewerInstallAttempt:
+    source: str
+    result: InstallResult | None
+    error: str | None
+
+
 class SkillMeta(BaseModel):
     """Metadata for an installed skill."""
 
@@ -321,6 +328,35 @@ def install_skill_from_github(repo_slug: str, force: bool = False) -> InstallRes
         raise SkillInvalid(
             f"no SKILL.md in {repo_slug} (looked in: {', '.join(SKILL_MD_CANDIDATE_PATHS)})"
         )
+
+
+def install_reviewer_with_fallback(
+    fallback_repos: list[str] | None = None,
+    local_path: str | Path | None = None,
+    *,
+    force: bool = False,
+) -> tuple[InstallResult | None, list[ReviewerInstallAttempt]]:
+    attempts: list[ReviewerInstallAttempt] = []
+
+    if local_path is not None:
+        local = Path(local_path).expanduser()
+        if local.exists():
+            try:
+                result = install_skill(str(local), force=force)
+                attempts.append(ReviewerInstallAttempt(source=str(local), result=result, error=None))
+                return result, attempts
+            except SkillError as exc:
+                attempts.append(ReviewerInstallAttempt(source=str(local), result=None, error=str(exc)))
+
+    for repo in fallback_repos or []:
+        try:
+            result = install_skill_from_github(repo, force=force)
+            attempts.append(ReviewerInstallAttempt(source=repo, result=result, error=None))
+            return result, attempts
+        except SkillError as exc:
+            attempts.append(ReviewerInstallAttempt(source=repo, result=None, error=str(exc)))
+
+    return None, attempts
 
 
 def list_skills() -> list[SkillMeta]:

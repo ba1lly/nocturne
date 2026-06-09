@@ -13,6 +13,7 @@ from nocturne import skills as skills_mod
 from nocturne.cli import app
 from nocturne.skills import (
     InstallResult,
+    ReviewerInstallAttempt,
     SkillError,
     SkillExists,
     SkillInvalid,
@@ -20,6 +21,7 @@ from nocturne.skills import (
     SkillNotFound,
     disable_skill,
     enable_skill,
+    install_reviewer_with_fallback,
     install_skill,
     install_skill_from_github,
     is_skill_enabled,
@@ -179,6 +181,153 @@ def _fake_gh_clone_factory(layout: dict[str, str]):
         raise AssertionError(f"unexpected subprocess call: {args!r}")
 
     return fake_run
+
+
+def test_install_reviewer_with_fallback_uses_local_path_first(
+    tmp_path: Path, skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = _make_skill_file(tmp_path)
+    gh_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "nocturne.skills.subprocess.run",
+        lambda args, **kw: gh_calls.append(list(args)),
+    )
+
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=["ba1lly/reviewer-config", "Defizoo/reviewer"],
+        local_path=str(src),
+    )
+
+    assert result is not None
+    assert result.name == "reviewer"
+    assert len(attempts) == 1
+    assert attempts[0].source == str(src)
+    assert attempts[0].result is result
+    assert gh_calls == []
+
+
+def test_install_reviewer_with_fallback_first_repo_wins(
+    skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_gh_clone_factory({"SKILL.md": SAMPLE_FRONTMATTER})
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=["ba1lly/reviewer-config", "Defizoo/reviewer"],
+        local_path=None,
+    )
+
+    assert result is not None
+    assert result.name == "reviewer"
+    assert [a.source for a in attempts] == ["ba1lly/reviewer-config"]
+
+
+def test_install_reviewer_with_fallback_falls_through_to_second_repo(
+    skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess as _sp
+    calls: list[str] = []
+
+    def fake_run(args, **kw):
+        if list(args[:3]) != ["gh", "repo", "clone"]:
+            raise AssertionError(f"unexpected: {args!r}")
+        slug = args[3]
+        calls.append(slug)
+        if slug == "ba1lly/reviewer-config":
+            return _sp.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="not authenticated")
+        dest = Path(args[4])
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "SKILL.md").write_text(SAMPLE_FRONTMATTER, encoding="utf-8")
+        return _sp.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake_run)
+
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=["ba1lly/reviewer-config", "Defizoo/reviewer"],
+        local_path=None,
+    )
+
+    assert result is not None
+    assert result.name == "reviewer"
+    assert calls == ["ba1lly/reviewer-config", "Defizoo/reviewer"]
+    assert [a.source for a in attempts] == ["ba1lly/reviewer-config", "Defizoo/reviewer"]
+    assert attempts[0].result is None
+    assert attempts[0].error is not None
+    assert attempts[1].result is result
+
+
+def test_install_reviewer_with_fallback_returns_none_when_all_fail(
+    skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess as _sp
+
+    def fake_run(args, **kw):
+        return _sp.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="forbidden")
+
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake_run)
+
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=["ba1lly/reviewer-config", "Defizoo/reviewer"],
+        local_path=None,
+    )
+
+    assert result is None
+    assert len(attempts) == 2
+    assert all(a.result is None for a in attempts)
+    assert all(a.error for a in attempts)
+
+
+def test_install_reviewer_with_fallback_skips_missing_local_path(
+    tmp_path: Path, skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _fake_gh_clone_factory({"SKILL.md": SAMPLE_FRONTMATTER})
+    monkeypatch.setattr("nocturne.skills.subprocess.run", fake)
+
+    missing = tmp_path / "does-not-exist"
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=["ba1lly/reviewer-config"],
+        local_path=str(missing),
+    )
+
+    assert result is not None
+    assert [a.source for a in attempts] == ["ba1lly/reviewer-config"]
+
+
+def test_cli_install_reviewer_success_path(
+    skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    success = InstallResult(name="reviewer", status="installed")
+    attempts = [ReviewerInstallAttempt(source="ba1lly/reviewer-config", result=success, error=None)]
+    monkeypatch.setattr(
+        "nocturne.skills.install_reviewer_with_fallback",
+        lambda fallback_repos, local_path, force=False: (success, attempts),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skill", "install-reviewer"])
+    assert result.exit_code == 0
+    assert "ba1lly/reviewer-config" in result.stdout
+    assert "installed" in result.stdout
+
+
+def test_cli_install_reviewer_all_fail_exits_nonzero(
+    skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = [
+        ReviewerInstallAttempt(source="ba1lly/reviewer-config", result=None, error="not authenticated"),
+        ReviewerInstallAttempt(source="Defizoo/reviewer", result=None, error="forbidden"),
+    ]
+    monkeypatch.setattr(
+        "nocturne.skills.install_reviewer_with_fallback",
+        lambda fallback_repos, local_path, force=False: (None, attempts),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skill", "install-reviewer"])
+    assert result.exit_code == 1
+    assert "/review" in result.stdout
+    assert "ba1lly/reviewer-config" in result.stdout
+    assert "Defizoo/reviewer" in result.stdout
 
 
 def test_install_skill_from_github_finds_skill_at_root(

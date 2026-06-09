@@ -20,11 +20,15 @@ Address the issue. {% if require_new_test %}You MUST add at least one new test o
 Run `{{ verify_cmd }}`. Iterate on the code until it exits 0.
 
 ### Step 3: Self-review
-Invoke the reviewer subagent on your work:
+{% if reviewer_skill_installed %}Invoke the reviewer subagent on your work:
 
 > @reviewer please review the changes I just made on the current branch (compared to `{{ base }}`). Report ALL findings at every severity (critical, high, medium, low, info).
 
-The reviewer is a READ-ONLY subagent — it will not modify your code. It returns a structured list of findings.
+The reviewer is a READ-ONLY subagent — it will not modify your code. It returns a structured list of findings.{% else %}Run opencode's built-in code review on your work:
+
+> /review the changes I just made on the current branch (compared to `{{ base }}`). Report ALL findings at every severity (critical, high, medium, low, info).
+
+The review is READ-ONLY — it will not modify your code. It returns a structured list of findings.{% endif %}
 
 ### Step 4: Address every finding
 For each finding the reviewer returned — regardless of severity (critical, high, medium, low, info — fix them all):

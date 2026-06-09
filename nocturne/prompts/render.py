@@ -6,6 +6,7 @@ import jinja2
 
 from nocturne.config import Config, ConfigError
 from nocturne.models import Task
+from nocturne.skills import is_skill_enabled
 
 _SOUL_CACHE: dict[str, tuple[int, str]] = {}
 _MAX_SOUL_CHARS = 8192
@@ -61,6 +62,7 @@ def render_task_prompt(task: Task, cfg: Config, prior_failure: str | None = None
         base=task.base,
         budget_attempts=cfg.review.budget_attempts,
         prior_failure=prior_failure,
+        reviewer_skill_installed=is_skill_enabled("reviewer"),
     )
 
 

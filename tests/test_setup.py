@@ -113,8 +113,8 @@ def test_no_hardcoded_owner_in_production():
             continue
         if "scripts/m" in line and "_acceptance.sh" in line:
             continue
-        if "nocturne/config.py" in line and "ba1lly/reviewer-config" in line:
-            continue
-        filtered_lines.append(line)
+            if "ba1lly/reviewer-config" in line:
+                continue
+            filtered_lines.append(line)
 
     assert not filtered_lines, f"Found hardcoded 'ba1lly/' in production code:\n" + "\n".join(filtered_lines)

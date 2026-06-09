@@ -217,14 +217,13 @@ def _step5_secrets(answers: WizardAnswers, console: Console) -> None:
 
 def _step6_reviewer(answers: WizardAnswers, console: Console) -> None:
     console.print("\n[bold cyan][6/6] Reviewer skill[/bold cyan]")
-    reviewer_dir = Path.home() / ".agents" / "skills" / "reviewer"
-    if reviewer_dir.exists():
-        answers.install_reviewer = typer.confirm(
-            f"  install from {reviewer_dir}?", default=answers.install_reviewer
-        )
-    else:
-        console.print(f"  [dim](skipped — {reviewer_dir} not found)[/dim]")
-        answers.install_reviewer = False
+    console.print(
+        "  [dim]Tries: ~/.agents/skills/reviewer/ → ba1lly/reviewer-config → Defizoo/reviewer.[/dim]\n"
+        "  [dim]If none accessible, opencode's built-in /review is used.[/dim]"
+    )
+    answers.install_reviewer = typer.confirm(
+        "  attempt install?", default=True
+    )
 
 
 def _print_summary(answers: WizardAnswers, console: Console) -> None:
@@ -348,20 +347,30 @@ def _write_env_file(env_file: Path, answers: WizardAnswers, console: Console) ->
 
 
 def _install_reviewer_skill(console: Console) -> None:
-    from nocturne.skills import SkillError, install_skill
+    from nocturne.config import ReviewConfig
+    from nocturne.skills import install_reviewer_with_fallback
 
-    src = Path.home() / ".agents" / "skills" / "reviewer"
-    if not src.exists():
-        console.print(f"  [yellow]⚠[/yellow] {src} not found; cannot install")
-        return
-    try:
-        result = install_skill(str(src), force=False)
-        if result.status == "already_installed":
-            console.print(f"  [dim]→ {result.name} already installed (no changes)[/dim]")
+    local_path = Path.home() / ".agents" / "skills" / "reviewer"
+    result, attempts = install_reviewer_with_fallback(
+        fallback_repos=ReviewConfig().fallback_repos,
+        local_path=local_path,
+    )
+
+    for attempt in attempts:
+        if attempt.result is not None:
+            label = (
+                "already installed" if attempt.result.status == "already_installed"
+                else f"installed ({attempt.result.status})"
+            )
+            console.print(f"  [green]✓[/green] {attempt.source} → {label}")
         else:
-            console.print(f"  [green]✓[/green] installed skill: {result.name}")
-    except SkillError as e:
-        console.print(f"  [yellow]⚠[/yellow] skill install failed: {e}")
+            console.print(f"  [dim]·[/dim] {attempt.source} → skipped ({attempt.error})")
+
+    if result is None:
+        console.print(
+            "  [yellow]⚠[/yellow] no reviewer skill installed; opencode's built-in "
+            "[cyan]/review[/cyan] will be used instead"
+        )
 
 
 def run_wizard(
