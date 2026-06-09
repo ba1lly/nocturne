@@ -109,14 +109,18 @@ class DaemonConfig(StrictBaseModel):
 class ReviewConfig(StrictBaseModel):
     enabled: bool = True
     budget_attempts: int = 2
+    # Reserved for future severity-filtered @reviewer wiring — unused as of
+    # Approach 1 (commits 774a67f, 0155364, 541af97).
     severity_floor: Literal["info", "low", "medium", "high", "critical"] = "info"
     skill_name: str = "reviewer"
-    slash_command: str = "review-pr"
-    fallback_slash_command: str = "review"
+    # Reserved for future use — Approach 1 enforces append-only review history
+    # implicitly via PR body file; the Literal[True] guard locks the invariant.
     append_only: Literal[True] = True
+    # Reserved for future fallback-skill resolution; not read by Approach 1.
     fallback_repos: list[str] = Field(
         default_factory=lambda: ["ba1lly/reviewer-config", "Defizoo/reviewer"]
     )
+    # Reserved for future use — Approach 1 always uses OpenCode default.
     use_opencode_default_when_unavailable: bool = True
 
 

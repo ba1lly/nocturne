@@ -43,7 +43,6 @@ class Daemon:
         self._stop = asyncio.Event()
         self._tokens_used = 0
         self._last_poll_at: Optional[datetime] = None
-        self._review_inflight: dict[str, asyncio.Task[Any]] = {}
 
     def is_paused(self) -> bool:
         """Return True if the daemon is currently paused (in-process view)."""
@@ -246,51 +245,6 @@ class Daemon:
 
         return cycle_summary
 
-    def _schedule_review(self, result_task: Any) -> None:
-        """Schedule a review_fix_loop as an async task for a completed task with a PR.
-
-        DEPRECATED: As of Approach 1, the review-fix cycle runs INSIDE the
-        opencode subprocess that creates the PR (via @reviewer subagent calls
-        from the task prompt). This standalone scheduler is no longer called
-        from run_one_cycle and is retained only for backward compat with the
-        public _schedule_review API tests + manual triggering.
-        """
-        if not self.cfg.review.enabled:
-            return
-        if not getattr(result_task, "pr_url", None):
-            return
-        task_id = result_task.id
-        if task_id in self._review_inflight:
-            return
-
-        async def _do_review() -> None:
-            try:
-                from pathlib import Path
-
-                from nocturne.review import review_fix_loop
-
-                wt_root = Path(self.cfg.opencode.worktree_root)
-                wt = wt_root / f"review-{task_id.replace('/', '__')}"
-                logger.info(
-                    "scheduling review for %s (PR %s)",
-                    task_id, result_task.pr_url,
-                )
-                try:
-                    await asyncio.to_thread(
-                        review_fix_loop,
-                        result_task.pr_url, wt, self.cfg, self.store,
-                        task_id, getattr(result_task, "base", "main"),
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "review_fix_loop failed for %s: %s", task_id, e,
-                    )
-            finally:
-                self._review_inflight.pop(task_id, None)
-
-        review_task = asyncio.create_task(_do_review(), name=f"review:{task_id}")
-        self._review_inflight[task_id] = review_task
-
     async def _poll_loop(self) -> None:
         """Main poll loop. Polls SQLite pause flag, then runs cycles."""
         pause_tick_sec = min(1.0, max(0.1, float(self.cfg.daemon.poll_interval_sec)))
@@ -392,25 +346,6 @@ class Daemon:
             # Drain cancelled tasks.
             await asyncio.gather(*pending, return_exceptions=True)
         finally:
-            if self._review_inflight:
-                logger.info(
-                    "awaiting %s in-flight review(s) up to 30s",
-                    len(self._review_inflight),
-                )
-                try:
-                    await asyncio.wait_for(
-                        asyncio.gather(
-                            *self._review_inflight.values(),
-                            return_exceptions=True,
-                        ),
-                        timeout=30.0,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "review tasks did not finish within 30s; cancelling",
-                    )
-                    for t in self._review_inflight.values():
-                        t.cancel()
             if healthcheck is not None:
                 try:
                     await healthcheck.stop()

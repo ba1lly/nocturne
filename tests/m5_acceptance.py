@@ -95,7 +95,13 @@ def test_setup_sh_non_interactive():
 
 
 def test_reviewer_loop_end_to_end():
-    """Test 3: Daemon-scheduled review_fix_loop after task done."""
+    """Test 3: In-session @reviewer cycle inside the OpenCode task subprocess.
+
+    Post-Approach-1 (commits 774a67f, 0155364, 541af97) the review→fix loop
+    runs inside the single OpenCode session that creates the PR; the build
+    agent invokes the @reviewer subagent and loops up to
+    ``cfg.review.budget_attempts`` before writing ``.nocturne-pr-body.md``.
+    """
     pytest.skip("Requires live daemon + DASHSCOPE_API_KEY")
 
 
