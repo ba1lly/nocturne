@@ -211,12 +211,16 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 echo "✓ nocturne.db exists"
 
-SQLITE_ROW=$(python3 << 'PYEOF'
+SQLITE_ROW=$(DB_PATH="$DB_PATH" ISSUE="$ISSUE" python3 - << 'PYEOF'
+import os
 import sqlite3
 import json
 try:
-    db = sqlite3.connect('DBPATH')
-    row = db.execute("SELECT status, pr_url, issue_number FROM tasks WHERE issue_number=ISSUE").fetchone()
+    db = sqlite3.connect(os.environ["DB_PATH"])
+    row = db.execute(
+        "SELECT status, pr_url, issue_number FROM tasks WHERE issue_number=?",
+        (int(os.environ["ISSUE"]),),
+    ).fetchone()
     if row:
         print(json.dumps({"status": row[0], "pr_url": row[1], "issue_number": row[2]}))
     else:
@@ -225,8 +229,6 @@ except Exception as e:
     print(f"error: {e}")
 PYEOF
 )
-SQLITE_ROW="${SQLITE_ROW//DBPATH/$DB_PATH}"
-SQLITE_ROW="${SQLITE_ROW//ISSUE/$ISSUE}"
 
 echo "$SQLITE_ROW" > "$EVIDENCE_DIR/milestone-M1-sqlite.json"
 
