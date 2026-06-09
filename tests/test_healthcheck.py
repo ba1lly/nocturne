@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -57,7 +58,7 @@ def fake_cfg():
         repos=[
             RepoConfig(
                 slug="ba1lly/sandbox",
-                checkout_path="/home/bailly/projects/nocturne",
+                checkout_path=str(Path(__file__).resolve().parents[1]),
                 label="agent",
                 base="main",
                 verify_cmd="pytest -q",

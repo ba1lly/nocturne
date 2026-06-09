@@ -2,10 +2,13 @@ nocturne.db
 .venv/
 /tmp/nocturne/
 reports/
-.omo/evidence/
+.omo/
 __pycache__/
 *.pyc
 .coverage
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.reviews/
+.nocturne-pr-body.md
+nocturne.yaml

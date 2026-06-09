@@ -1,4 +1,0 @@
-Real reviewer invocation deferred — requires reviewer skill installed + DASHSCOPE_API_KEY env.
-Unit tests cover the contract (skill detection, JSON parsing, regex fallback, severity floor).
-
-See test_real_review_smoke in tests/test_review.py (skipped pending real reviewer skill + live API).

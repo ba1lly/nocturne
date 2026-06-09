@@ -94,7 +94,7 @@ def cfg():
         repos=[
             RepoConfig(
                 slug="ba1lly/sandbox",
-                checkout_path="/home/bailly/projects/nocturne",
+                checkout_path=str(Path(__file__).resolve().parents[1]),
                 label="agent",
                 base="main",
                 verify_cmd="pytest -q",

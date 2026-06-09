@@ -73,7 +73,7 @@ Nocturne stores its state in a SQLite database located at `~/.local/state/noctur
 
 It is highly recommended to set up a cron job to back up the database daily. Here is an example cron entry:
 ```bash
-0 2 * * * sqlite3 ~/.local/state/nocturne/nocturne.db ".backup /home/bailly/backups/nocturne-$(date +\%F).db"
+0 2 * * * sqlite3 ~/.local/state/nocturne/nocturne.db ".backup $HOME/backups/nocturne-$(date +\%F).db"
 ```
 
 ### Recovery Procedure

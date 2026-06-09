@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -47,7 +48,7 @@ def fake_cfg():
         repos=[
             RepoConfig(
                 slug="ba1lly/sandbox",
-                checkout_path="/home/bailly/projects/nocturne",  # has .git/
+                checkout_path=str(Path(__file__).resolve().parents[1]),  # has .git/
                 label="agent",
                 base="main",
                 verify_cmd="pytest -q",

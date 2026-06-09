@@ -182,7 +182,7 @@ bash scripts/setup.sh --non-interactive --owner "$OWNER" --sandbox-repo "$SANDBO
     | tee "$EVIDENCE_DIR/milestone-M5-setup.log"
 
 # Verify config loads
-DASHSCOPE_API_KEY=x NOCTURNE_DISCORD_TOKEN=y .venv/bin/python -c \
+DASHSCOPE_API_KEY="x" NOCTURNE_DISCORD_TOKEN="y" .venv/bin/python -c \
     "from nocturne.config import load_config; cfg=load_config('/tmp/m5-config-test/config.yaml'); print(cfg.github.owner)" \
     | grep -q "^$OWNER$" || { echo "FAIL: setup.sh produced invalid config"; exit 1; }
 

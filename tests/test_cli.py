@@ -39,7 +39,7 @@ def _make_test_config(
 ) -> Config:
     """Build a minimal Config for testing."""
     if checkout_path is None:
-        checkout_path = str(Path("/home/bailly/projects/nocturne").resolve())
+        checkout_path = str(Path(__file__).resolve().parents[1])
 
     return Config(
         github=GitHubConfig(owner="ba1lly"),
@@ -91,7 +91,7 @@ def _make_test_task(
         created_at=now,
         updated_at=now,
         repo_slug=repo_slug,
-        checkout_path="/home/bailly/projects/nocturne",
+            checkout_path=str(Path(__file__).resolve().parents[1]),
         issue_number=issue_number,
         title="Test issue",
         body="Test body",
@@ -540,7 +540,7 @@ class TestResume:
             created_at=now,
             updated_at=now,
             repo_slug="ba1lly/playground",
-            checkout_path="/home/bailly/projects/nocturne",
+        checkout_path=str(Path(__file__).resolve().parents[1]),
             issue_number=1,
             title="Test issue",
             body="Test body",

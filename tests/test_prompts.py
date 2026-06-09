@@ -24,7 +24,7 @@ from nocturne.config import (
 from nocturne.models import Task
 from nocturne.prompts.render import load_soul, render_review_prompt, render_task_prompt
 
-PROJECT_DIR = Path("/home/bailly/projects/nocturne")
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
 def make_config(*, enabled: bool = False, soul_path: str | None = None) -> Config:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -59,7 +60,7 @@ def fake_cfg():
         repos=[
             RepoConfig(
                 slug="ba1lly/sandbox",
-                checkout_path="/home/bailly/projects/nocturne",
+                checkout_path=str(Path(__file__).resolve().parents[1]),
                 label="agent",
                 base="main",
                 verify_cmd="pytest -q",
@@ -438,6 +439,48 @@ async def test_poll_loop_paused_observes_resume(
     await helper
     # After resume, at least one cycle should have run (fetch called).
     assert counts["fetch"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_unpause_refreshes_health_heartbeat_cross_process(
+    fake_cfg, tmp_path
+):
+    from nocturne.daemon import Daemon
+    from nocturne.store import Store
+
+    db_path = tmp_path / "nocturne.db"
+    daemon_store = Store(db_path)
+    cli_store = Store(db_path)
+    fake_cfg.daemon.poll_interval_sec = 0.1
+    d = Daemon(fake_cfg, daemon_store)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _long_cycle():
+        started.set()
+        await release.wait()
+        return {"fetched": 0, "errors": []}
+
+    d.run_one_cycle = _long_cycle  # type: ignore[method-assign]
+    cli_store.set_daemon_flag("paused", "0")
+    runner = asyncio.create_task(d._poll_loop())
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    cli_store.set_daemon_flag("paused", "1")
+    await asyncio.sleep(0.25)
+    cli_store.set_daemon_flag("paused", "0")
+    unpaused_at = datetime.now(timezone.utc)
+
+    async def _wait_for_heartbeat() -> None:
+        while d.last_poll_at is None or d.last_poll_at < unpaused_at:
+            await asyncio.sleep(0.02)
+
+    await asyncio.wait_for(_wait_for_heartbeat(), timeout=1.0)
+    release.set()
+    d._stop.set()
+    await asyncio.wait_for(runner, timeout=1.0)
+    daemon_store.close()
+    cli_store.close()
 
 
 @pytest.mark.asyncio
