@@ -18,6 +18,7 @@ jobs:
     name: Analyze (python)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.event.repository.visibility == 'public'
     steps:
       - uses: actions/checkout@v4
 

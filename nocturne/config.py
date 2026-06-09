@@ -218,6 +218,13 @@ def load_test_config(path: str | Path = "config.example.yaml", channel_id: int =
     discord = cast(dict[str, Any], raw["discord"])
     discord["channel_id"] = channel_id
     discord["mention_user_id"] = user_id
+    project_root = str(Path(__file__).resolve().parent.parent)
+    for repo in raw.get("repos", []):
+        if isinstance(repo, dict):
+            repo["checkout_path"] = project_root
+    sandbox = raw.get("sandbox")
+    if isinstance(sandbox, dict) and "checkout_path" in sandbox:
+        sandbox["checkout_path"] = project_root
     cfg = Config.model_validate(raw)
     _validate_env_vars(cfg)
     return cfg

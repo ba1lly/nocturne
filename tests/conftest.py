@@ -13,6 +13,9 @@ from nocturne.store import Store
 from tests.fakes import FakeOpenAI, RecordingSubprocess
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
+os.environ.setdefault("NO_COLOR", "1")
+os.environ.setdefault("TERM", "dumb")
+os.environ.setdefault("COLUMNS", "200")
 
 
 @pytest.fixture
