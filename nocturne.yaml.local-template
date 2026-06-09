@@ -1,0 +1,67 @@
+# Copy this file to `nocturne.yaml` in your project root and fill in the real IDs below.
+# Keep `nocturne.yaml` out of git; this template is the checked-in starting point.
+
+github:
+  owner: "<your-github-username>"
+
+sandbox:
+  repo_name: "nocturne-playground"
+  checkout_path: "~/projects/nocturne-playground-checkout"
+
+providers:
+  alibaba-coding-plan:
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    api_key_env: "DASHSCOPE_API_KEY"
+
+models:
+  reasoning: "alibaba-coding-plan/qwen3.6-plus"
+  report: "alibaba-coding-plan/qwen3.6-plus"
+  coding: "alibaba-coding-plan/qwen3-coder-plus"
+
+opencode:
+  command: "opencode"
+  timeout_min: 25
+  worktree_root: "/tmp/nocturne"
+
+repos:
+  - slug: "<your-github-username>/nocturne-playground"
+    checkout_path: "~/projects/nocturne-playground-checkout"
+    label: "agent"
+    base: "main"
+    verify_cmd: "pytest -q"
+    require_new_test: true
+
+guardrails:
+  max_attempts: 3
+  per_task_timeout_min: 25
+  global_wallclock_hours: 8
+  token_budget: 2_000_000
+  allow_force_push: false
+  allow_auto_merge: false
+
+discord:
+  enabled: true
+  bot_token_env: "NOCTURNE_DISCORD_TOKEN"
+  channel_id: "<YOUR_CHANNEL_ID>"
+  mention_user_id: "<YOUR_USER_ID>"
+
+daemon:
+  poll_interval_sec: 300
+  quiet_hours: []
+
+review:
+  enabled: true
+  budget_attempts: 2
+  severity_floor: "info"
+  skill_name: "reviewer"
+  append_only: true
+
+healthcheck:
+  enabled: true
+  bind_host: "127.0.0.1"
+  bind_port: 8765
+  staleness_factor: 2
+
+persona:
+  enabled: true
+  soul_path: "~/.config/nocturne/soul.md"
