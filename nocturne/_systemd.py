@@ -1,4 +1,4 @@
-"""systemd helper utilities — primarily for testing the unit template."""
+"""systemd helper utilities - primarily for testing the unit template."""
 from __future__ import annotations
 
 import subprocess

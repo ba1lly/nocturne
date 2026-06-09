@@ -219,7 +219,7 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                 task.status = "failed"
                 log.warning("task=%s exhausted attempts; marking failed", task.id)
 
-        # If we broke out via sentinel, the for/else didn't run — set failed here.
+        # If we broke out via sentinel, the for/else didn't run - set failed here.
         if not success and task.status != "failed":
             store.update_status(task.id, "failed")
             task.status = "failed"
@@ -241,7 +241,7 @@ def partition_eligible(
                    (i.e. user resumed them via `nocturne resume`); bypass triage
                    and go directly to process_task with the stored row
       - Everything else (done, aborted, parked, skipped, running, failed,
-        selected-without-answer) is silently dropped — already handled this
+        selected-without-answer) is silently dropped - already handled this
         lifecycle. An INFO log records the skip per task.
 
     Shared between orchestrator.run_batch (CLI run-once path) and
@@ -291,7 +291,7 @@ def _dispatch_triaged(
         if not dry_run:
             try:
                 post_park_comment(task.repo_slug, task.issue_number, question)
-            except Exception as exc:  # noqa: BLE001 — batch must keep going
+            except Exception as exc:  # noqa: BLE001 - batch must keep going
                 log = get_logger("nocturne.orchestrator")
                 log.warning(
                     "post_park_comment unexpectedly raised on %s#%s (swallowed): %s",
@@ -318,7 +318,7 @@ def run_batch(
 ) -> RunReport:
     """Fetch eligible issues, triage, and process each per outcome.
 
-    Returns an aggregate RunReport. Never raises on individual task failures —
+    Returns an aggregate RunReport. Never raises on individual task failures -
     all errors are collected into `RunReport.errors`. Wallclock guard is
     checked between tasks; a violation aborts the remainder of the batch.
     """
@@ -413,7 +413,7 @@ def run_batch(
                 parked.append(
                     ParkedTask(
                         **base,
-                        question=tr.reason or "Triage classified as NEED_INPUT — clarification required.",
+                        question=tr.reason or "Triage classified as NEED_INPUT - clarification required.",
                         parked_at=datetime.now(timezone.utc),
                     )
                 )

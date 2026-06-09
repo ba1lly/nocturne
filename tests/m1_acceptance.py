@@ -1,4 +1,4 @@
-"""M1 acceptance test — runs the full end-to-end flow against the live sandbox.
+"""M1 acceptance test - runs the full end-to-end flow against the live sandbox.
 
 Skipped by default; opt-in via env var NOCTURNE_RUN_M1=1.
 

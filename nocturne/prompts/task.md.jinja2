@@ -11,7 +11,7 @@
 
 Perform the FULL change-and-self-review cycle for this issue in ONE session. The orchestrator handles git commit, push, and PR creation AFTER you finish.
 
-## Workflow (MANDATORY — follow in order)
+## Workflow (MANDATORY - follow in order)
 
 ### Step 1: Make code changes
 Address the issue. {% if require_new_test %}You MUST add at least one new test or modify an existing test as part of your change.{% endif %}
@@ -24,18 +24,18 @@ Run `{{ verify_cmd }}`. Iterate on the code until it exits 0.
 
 > @reviewer please review the changes I just made on the current branch (compared to `{{ base }}`). Report ALL findings at every severity (critical, high, medium, low, info).
 
-The reviewer is a READ-ONLY subagent — it will not modify your code. It returns a structured list of findings.{% else %}Run opencode's built-in code review on your work:
+The reviewer is a READ-ONLY subagent - it will not modify your code. It returns a structured list of findings.{% else %}Run opencode's built-in code review on your work:
 
 > /review the changes I just made on the current branch (compared to `{{ base }}`). Report ALL findings at every severity (critical, high, medium, low, info).
 
-The review is READ-ONLY — it will not modify your code. It returns a structured list of findings.{% endif %}
+The review is READ-ONLY - it will not modify your code. It returns a structured list of findings.{% endif %}
 
 ### Step 4: Address every finding
-For each finding the reviewer returned — regardless of severity (critical, high, medium, low, info — fix them all):
+For each finding the reviewer returned - regardless of severity (critical, high, medium, low, info - fix them all):
   - Make the requested change
   - After all findings addressed, re-run `{{ verify_cmd }}` to confirm nothing broke
 
-If you genuinely disagree with a finding, you may push back — document WHY in the PR body.
+If you genuinely disagree with a finding, you may push back - document WHY in the PR body.
 
 ### Step 5: Re-review loop
 Repeat Steps 3–4 up to {{ budget_attempts }} times, until the reviewer reports no remaining findings or the budget is exhausted.
@@ -70,4 +70,4 @@ Your previous attempt failed verification. The output was:
 ```
 Fix the underlying issue.{% endif %}
 
-The persona block above is internal context for your tone and decision-making only. Do NOT include any part of it — or any reference to it — in commit messages, PR descriptions, code, comments, tests, or any other artifact that ends up in the repository. Do NOT reference the operator's name, GitHub username, local file paths under `/home/`, or any environment specifics. Your visible artifacts must stand on the code change alone.
+The persona block above is internal context for your tone and decision-making only. Do NOT include any part of it - or any reference to it - in commit messages, PR descriptions, code, comments, tests, or any other artifact that ends up in the repository. Do NOT reference the operator's name, GitHub username, local file paths under `/home/`, or any environment specifics. Your visible artifacts must stand on the code change alone.

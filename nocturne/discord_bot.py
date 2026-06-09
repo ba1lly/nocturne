@@ -1,4 +1,4 @@
-"""Discord bot — single-process asyncio integration with daemon.
+"""Discord bot - single-process asyncio integration with daemon.
 
 Sends NEED_INPUT messages, routes reply-based answers back to askflow.resume_with_answer.
 Persists message_id ↔ task_id mapping in SQLite to survive bot restart.

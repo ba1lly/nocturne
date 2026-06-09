@@ -43,7 +43,7 @@ _JSON_FIELDS_WITH_STATE = "number,title,body,labels,assignees,state"
 def _build_task(item: dict[str, Any], repo_cfg: RepoConfig) -> Task:
     """Construct a Task from a raw gh JSON item.
 
-    coding_model and branch are left empty — the orchestrator fills them in
+    coding_model and branch are left empty - the orchestrator fills them in
     from cfg.models.coding and branch_name(...). status starts as 'selected'.
     """
     now = datetime.now(timezone.utc)

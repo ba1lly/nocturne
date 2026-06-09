@@ -1,5 +1,5 @@
 [Unit]
-Description=Nocturne — Autonomous Coding Orchestrator (daemon)
+Description=Nocturne - Autonomous Coding Orchestrator (daemon)
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5

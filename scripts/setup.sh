@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Thin wrapper — delegates to the reliable Python wizard.
+# Thin wrapper - delegates to the reliable Python wizard.
 # All flags are forwarded; run `nocturne setup --help` for full options.
 set -euo pipefail
 

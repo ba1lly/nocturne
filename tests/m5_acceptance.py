@@ -1,4 +1,4 @@
-"""M5 acceptance test — skill install + reviewer loop + systemd + healthcheck E2E.
+"""M5 acceptance test - skill install + reviewer loop + systemd + healthcheck E2E.
 
 Skipped by default; opt-in via env var NOCTURNE_RUN_M5=1.
 

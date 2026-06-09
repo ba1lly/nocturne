@@ -1,4 +1,4 @@
-"""Tests for nocturne.askflow — combined Task 25 + 26.
+"""Tests for nocturne.askflow - combined Task 25 + 26.
 
 Covers:
   - detect_need_input() sentinel propagation from OpenCodeResult
@@ -108,7 +108,7 @@ def _make_task(
 
 
 # ---------------------------------------------------------------------------
-# Group A: Task 25 primitives — detect_need_input
+# Group A: Task 25 primitives - detect_need_input
 # ---------------------------------------------------------------------------
 
 
@@ -225,7 +225,7 @@ class TestAutoQuestionFromFailure:
             reason="big fail",
         )
         q = auto_question_from_failure(vr, attempts=5)
-        # Must not include all 2000 'x' chars — excerpt capped at 800.
+        # Must not include all 2000 'x' chars - excerpt capped at 800.
         # +1 tolerance for the 'x' in the literal word "excerpt:" in the
         # template (one occurrence). Anything beyond that signals leakage.
         assert q.count("x") <= 801
@@ -379,7 +379,7 @@ class TestLiteralSentinelGuard:
                 "type": "text",
                 "text": "User asked about ##NOCTURNE_NEED_INPUT##\nin the issue body.",
             },
-            # Final event is clean — agent completed normally
+            # Final event is clean - agent completed normally
             {"type": "text", "text": "Done. PR opened."},
         ]
         question = detect_sentinel(events)
@@ -425,7 +425,7 @@ class TestParkResumeRoundtrip:
         assert refreshed.status == "selected"
         assert refreshed.answer == "use binary search"
 
-        # Render prompt — answer must be injected
+        # Render prompt - answer must be injected
         rendered = render_resume_prompt(refreshed, cfg)
         assert "use binary search" in rendered
         assert "Human responded to your earlier question" in rendered
@@ -442,7 +442,7 @@ class TestHITLGraph:
     ) -> None:
         """Smoke-test: the graph constructs and compiles without exception.
 
-        We do NOT invoke the graph here — exercising interrupt + checkpoint
+        We do NOT invoke the graph here - exercising interrupt + checkpoint
         is brittle in-unit; the idempotency invariant is locked separately
         via the post_park_comment_node tests below.
         """
@@ -459,7 +459,7 @@ class TestHITLGraph:
 
 # ---------------------------------------------------------------------------
 # Group E: post_park_comment_node idempotency (the Metis "no duplicate
-# comment on resume" invariant, tested at unit level — equivalent to the
+# comment on resume" invariant, tested at unit level - equivalent to the
 # graph-level resume scenario but far cheaper to drive)
 # ---------------------------------------------------------------------------
 
@@ -549,9 +549,9 @@ class TestPostParkCommentIdempotency:
         from nocturne.askflow import post_park_comment_node
 
         recorder = _RunGhRecorder()
-        # view raises (gh broken) — fall through and try to post anyway
+        # view raises (gh broken) - fall through and try to post anyway
         recorder.queue(GhSubprocessError("gh broken"))
-        # post also raises — must NOT propagate
+        # post also raises - must NOT propagate
         recorder.queue(GhSubprocessError("post failed"))
 
         import nocturne._gh_retry as _gh

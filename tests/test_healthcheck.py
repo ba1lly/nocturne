@@ -1,4 +1,4 @@
-"""Tests for nocturne.healthcheck — /health and /metrics endpoints."""
+"""Tests for nocturne.healthcheck - /health and /metrics endpoints."""
 from __future__ import annotations
 
 import json

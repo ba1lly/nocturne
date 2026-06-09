@@ -1,4 +1,4 @@
-"""Tests for nocturne.discord_bot — bot logic only (no live Discord)."""
+"""Tests for nocturne.discord_bot - bot logic only (no live Discord)."""
 from __future__ import annotations
 
 import asyncio
@@ -286,7 +286,7 @@ async def test_mapping_persists_across_restart(inmem_store, fake_cfg, fake_disco
     async def cb(t, a):
         callback_called.append((t, a))
 
-    # Fresh bot — in-memory cache empty
+    # Fresh bot - in-memory cache empty
     bot = NocturneBot(fake_cfg, inmem_store, cb)
     assert bot._task_messages.get(22222) is None
     msg = MagicMock()

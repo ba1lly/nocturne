@@ -1,4 +1,4 @@
-"""Daemon crash recovery — worktree prune + PID-based task reconciliation.
+"""Daemon crash recovery - worktree prune + PID-based task reconciliation.
 
 Called on daemon startup (Task 32 wires this). Handles:
 1. Pruning stale worktree registrations in each cfg.repos[].checkout_path
@@ -22,7 +22,7 @@ def pid_alive(pid: int) -> bool:
     """Return True if a process with the given PID is alive.
 
     Uses os.kill(pid, 0): 0 is the null signal, raises ProcessLookupError if no such PID.
-    PermissionError means the process exists but is owned by a different uid — still alive.
+    PermissionError means the process exists but is owned by a different uid - still alive.
     """
     if pid <= 0:
         return False
@@ -102,7 +102,7 @@ def reconcile_worktrees(cfg: Config) -> list[Path]:
             if same_as_repo:
                 continue
             if not wt_path.exists():
-                # Ghost entry — force-remove from worktree registry
+                # Ghost entry - force-remove from worktree registry
                 try:
                     subprocess.run(
                         [
@@ -129,7 +129,7 @@ def reconcile_worktrees(cfg: Config) -> list[Path]:
 def reconcile_tasks(store: Store) -> dict[str, int]:
     """Scan for tasks with status 'running' or 'selected' (with PID); mark failed if PID dead.
 
-    Also handles the 'running with no PID' case (interrupted before PID write) — marks failed.
+    Also handles the 'running with no PID' case (interrupted before PID write) - marks failed.
     Parked tasks are NEVER touched.
     Returns a summary dict: {'killed_running', 'killed_selected', 'unchanged'}
     """

@@ -1,4 +1,4 @@
-"""Tests for nocturne.daemon — poll loop, quiet hours, budget, pause, shutdown."""
+"""Tests for nocturne.daemon - poll loop, quiet hours, budget, pause, shutdown."""
 from __future__ import annotations
 
 import asyncio
@@ -139,7 +139,7 @@ def _patch_pipeline(
     monkeypatch.setattr(tri, "triage_batch", _fake_triage)
     monkeypatch.setattr(orch, "process_task", _fake_process)
     # Also patch the daemon module if it's already imported the names
-    # (defensive — current daemon does function-scope imports so the source
+    # (defensive - current daemon does function-scope imports so the source
     # patches above are what matter).
     _ = daemon_module
     return call_counts, process_calls

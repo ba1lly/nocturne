@@ -1,4 +1,4 @@
-"""M2 acceptance test — runs the full end-to-end batch flow against the live sandbox.
+"""M2 acceptance test - runs the full end-to-end batch flow against the live sandbox.
 
 Skipped by default; opt-in via env var NOCTURNE_RUN_M2=1.
 

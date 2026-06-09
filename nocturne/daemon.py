@@ -1,4 +1,4 @@
-"""Daemon loop — single-process asyncio sharing event loop with Discord bot.
+"""Daemon loop - single-process asyncio sharing event loop with Discord bot.
 
 Polls each repo every ``cfg.daemon.poll_interval_sec``; respects ``quiet_hours``;
 honors ``token_budget`` halt; survives SIGTERM gracefully; supports cross-process
@@ -59,7 +59,7 @@ class Daemon:
     async def wait_for_resume(self, timeout: Optional[float] = None) -> bool:
         """In-process convenience for callers awaiting resume.
 
-        The poll loop does NOT use this — it polls SQLite directly to support
+        The poll loop does NOT use this - it polls SQLite directly to support
         cross-process pause.
         """
         try:
@@ -260,7 +260,7 @@ class Daemon:
                 continue
 
             if self._is_quiet_hour():
-                # Quiet-hour skip — also does NOT update _last_poll_at
+                # Quiet-hour skip - also does NOT update _last_poll_at
                 # (intentional staleness signal).
                 await asyncio.sleep(60)
                 continue
@@ -306,7 +306,7 @@ class Daemon:
             try:
                 loop.add_signal_handler(sig, lambda: self._stop.set())
             except NotImplementedError:
-                # Windows or unusual loop — skip (tests don't exercise this path).
+                # Windows or unusual loop - skip (tests don't exercise this path).
                 pass
 
     async def run(self) -> None:

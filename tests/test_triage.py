@@ -1,4 +1,4 @@
-"""Tests for nocturne.triage — combined Task 20 + 21.
+"""Tests for nocturne.triage - combined Task 20 + 21.
 
 Covers:
   - classify() outcome semantics (DOABLE / SKIP / NEED_INPUT)
@@ -93,7 +93,7 @@ def cfg(tmp_worktree: Path) -> Config:
 
 
 # ---------------------------------------------------------------------------
-# classify() — outcome semantics
+# classify() - outcome semantics
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +116,7 @@ class TestClassify:
 
     def test_classify_skip_for_vague(self, cfg: Config, mock_openai) -> None:
         mock_openai.responses.append(
-            '{"outcome":"SKIP","priority":5,"reason":"vague — refactor everything"}'
+            '{"outcome":"SKIP","priority":5,"reason":"vague - refactor everything"}'
         )
         from nocturne.triage import classify
 
@@ -153,7 +153,7 @@ class TestClassify:
         assert "parse error" in result.reason.lower()
 
     def test_classify_unknown_outcome_rejected_via_pydantic(self, cfg: Config, mock_openai) -> None:
-        # PARTIAL is forbidden by the TriageOutcome Literal — must fall back to SKIP
+        # PARTIAL is forbidden by the TriageOutcome Literal - must fall back to SKIP
         mock_openai.responses.append(
             '{"outcome":"PARTIAL","priority":50,"reason":"split it up"}'
         )
@@ -180,7 +180,7 @@ class TestClassify:
 
 
 # ---------------------------------------------------------------------------
-# triage_batch() — ordering + non-blocking comments
+# triage_batch() - ordering + non-blocking comments
 # ---------------------------------------------------------------------------
 
 
@@ -305,7 +305,7 @@ class TestTriageBatch:
 
 
 # ---------------------------------------------------------------------------
-# already_commented_skip() — marker detection + safety
+# already_commented_skip() - marker detection + safety
 # ---------------------------------------------------------------------------
 
 
@@ -341,7 +341,7 @@ class TestAlreadyCommentedSkip:
 
 
 # ---------------------------------------------------------------------------
-# post_skip_comment() — idempotency + non-blocking
+# post_skip_comment() - idempotency + non-blocking
 # ---------------------------------------------------------------------------
 
 
@@ -402,13 +402,13 @@ class TestPostSkipComment:
 
         monkeypatch.setattr("nocturne.triage.run_gh", raises)
 
-        # MUST NOT raise — non-blocking by contract
+        # MUST NOT raise - non-blocking by contract
         result = post_skip_comment("ba1lly/nocturne-playground", 4, "too big")
         assert result is None
 
 
 # ---------------------------------------------------------------------------
-# build_triage_graph() — LangGraph compiles
+# build_triage_graph() - LangGraph compiles
 # ---------------------------------------------------------------------------
 
 

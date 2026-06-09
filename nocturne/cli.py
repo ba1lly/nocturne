@@ -64,7 +64,7 @@ def global_callback(
 def _autoload_env_file() -> None:
     """Auto-source ~/.config/nocturne/env (or the dir adjacent to --config) into os.environ.
 
-    Idempotent — only sets keys not already present, so the user's shell exports always win.
+    Idempotent - only sets keys not already present, so the user's shell exports always win.
     KEY=VALUE format; lines starting with # or blank are skipped.
     """
     import os
@@ -139,7 +139,7 @@ def setup(
     non_interactive: bool = typer.Option(False, "--non-interactive"),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
-    """Interactive wizard — writes ~/.config/nocturne/config.yaml + optional env file."""
+    """Interactive wizard - writes ~/.config/nocturne/config.yaml + optional env file."""
     from nocturne.setup_wizard import ENV_NAME_RE, PROVIDERS, WizardAnswers, run_wizard
 
     if provider not in PROVIDERS:

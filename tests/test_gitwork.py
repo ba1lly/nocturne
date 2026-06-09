@@ -79,7 +79,7 @@ def test_make_worktree_adds_nocturne_artifacts_to_local_exclude(
 
 def test_make_worktree_local_exclude_is_idempotent(tmp_worktree: Path, tmp_path: Path) -> None:
     """Calling make_worktree twice (after cleanup) must not double-add
-    the exclude entries — preserves any user-added rules already there."""
+    the exclude entries - preserves any user-added rules already there."""
     wt_path = tmp_path / "wt-idem"
     make_worktree(tmp_worktree, "nocturne/issue-10-1", "main", wt_path)
 
@@ -148,7 +148,7 @@ def test_make_worktree_cleans_stale_path(tmp_worktree: Path, tmp_path: Path) -> 
 
     assert result == wt_path
     assert wt_path.exists()
-    # Stale placeholder must be gone — replaced by a real worktree checkout
+    # Stale placeholder must be gone - replaced by a real worktree checkout
     assert not (wt_path / ".placeholder").exists()
 
 
@@ -376,7 +376,7 @@ def test_cleanup_runs_worktree_remove(tmp_worktree: Path, tmp_path: Path) -> Non
 
 
 def test_cleanup_swallows_when_already_gone(tmp_worktree: Path, tmp_path: Path) -> None:
-    # Path was never registered as a worktree — cleanup must not raise
+    # Path was never registered as a worktree - cleanup must not raise
     cleanup(tmp_path / "never-was", tmp_worktree)
 
 

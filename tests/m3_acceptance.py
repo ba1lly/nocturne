@@ -1,4 +1,4 @@
-"""M3 acceptance test — runs the full ask/park/resume flow against the live sandbox.
+"""M3 acceptance test - runs the full ask/park/resume flow against the live sandbox.
 
 Skipped by default; opt-in via env var NOCTURNE_RUN_M3=1.
 
@@ -204,7 +204,7 @@ def test_m3_issue_5_not_falsely_parked(state_dir):
     else:
         status = row[0]
 
-    # Issue #5 should be done, failed, or absent — but NOT parked
+    # Issue #5 should be done, failed, or absent - but NOT parked
     assert status != "parked", f"CRITICAL: Issue #5 falsely parked (status={status})"
     assert status in ["done", "failed", "absent"], f"Issue #5 unexpected status: {status}"
 

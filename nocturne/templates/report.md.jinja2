@@ -11,7 +11,7 @@
 ## Done ({{ done|length }})
 
 {% for task in done %}
-- **Issue #{{ task.issue_number }}** — {{ task.title }}
+- **Issue #{{ task.issue_number }}** - {{ task.title }}
   - PR: {{ task.pr_url or 'n/a' }}
   - Branch: `{{ task.branch }}`
   - Attempts: {{ task.attempts }}
@@ -20,14 +20,14 @@
 ## Parked ({{ parked|length }})
 
 {% for task in parked %}
-- **Issue #{{ task.issue_number }}** — {{ task.title }}
+- **Issue #{{ task.issue_number }}** - {{ task.title }}
   - Question: {{ task.question }}
 {% endfor %}
 
 ## Skipped ({{ skipped|length }})
 
 {% for entry in skipped %}
-- Issue #{{ entry[0] }} — {{ entry[1] }}
+- Issue #{{ entry[0] }} - {{ entry[1] }}
 {% endfor %}
 
 ## Errors ({{ errors|length }})

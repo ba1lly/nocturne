@@ -1,4 +1,4 @@
-"""Healthcheck HTTP endpoint — aiohttp /health and /metrics on loopback.
+"""Healthcheck HTTP endpoint - aiohttp /health and /metrics on loopback.
 
 Used for external monitoring (uptimerobot, custom Discord pulse, systemd watchdog).
 """
@@ -77,7 +77,7 @@ class Healthcheck:
             return False
 
     def _sqlite_ping(self) -> None:
-        """Sync ping — runs in to_thread."""
+        """Sync ping - runs in to_thread."""
         self.store._conn.execute("SELECT 1").fetchone()
 
     async def _queue_depth(self) -> int:

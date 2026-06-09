@@ -91,7 +91,7 @@ def make_worktree(
                 text=True,
             )
         except subprocess.CalledProcessError:
-            # path exists but isn't a registered worktree — fall through to rmtree
+            # path exists but isn't a registered worktree - fall through to rmtree
             pass
         shutil.rmtree(worktree_path, ignore_errors=True)
 
@@ -265,5 +265,5 @@ def cleanup(wt: Path, repo_path: Path) -> None:
             text=True,
         )
     except subprocess.CalledProcessError:
-        # worktree already gone — swallow
+        # worktree already gone - swallow
         pass

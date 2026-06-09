@@ -1,5 +1,5 @@
 # pyright: reportTypedDictNotRequiredAccess=false
-"""Askflow — sentinel-based NEED_INPUT detection, park persistence, resume answer
+"""Askflow - sentinel-based NEED_INPUT detection, park persistence, resume answer
 injection, and LangGraph HITL graph with interrupt + idempotent post-interrupt
 side effects.
 
@@ -9,11 +9,11 @@ CRITICAL invariant (Metis directive on interrupt semantics):
 LangGraph re-runs an interrupted node from the TOP on resume. Therefore any
 externally-observable side effect (e.g. `gh issue comment`) MUST live in a
 SEPARATE node that runs AFTER the node containing `interrupt()`. The
-`post_park_comment_node` exists precisely for this reason — moving the comment
+`post_park_comment_node` exists precisely for this reason - moving the comment
 post inside `park_node` would cause a duplicate comment on every resume.
 
 Sentinel detection delegates to `opencode_driver.detect_sentinel` (last-event
-only). We never substring-match on raw text — that's the false-positive vector
+only). We never substring-match on raw text - that's the false-positive vector
 Metis flagged for Sandbox Issue #5 (literal sentinel in issue body).
 """
 
@@ -49,10 +49,10 @@ class AskflowError(Exception):
 def detect_need_input(result: OpenCodeResult) -> Optional[str]:
     """Return the question if the sentinel was seen in the LAST text event; else None.
 
-    Delegates entirely to Task 13's opencode_driver — the OpenCodeResult already
+    Delegates entirely to Task 13's opencode_driver - the OpenCodeResult already
     carries `sentinel_seen` and `need_input_question` populated by
     `detect_sentinel()` at run time. We NEVER substring-match on raw text
-    here — that would mis-fire on literal sentinels embedded in issue bodies
+    here - that would mis-fire on literal sentinels embedded in issue bodies
     (Metis: Sandbox Issue #5).
     """
     if result.sentinel_seen and result.need_input_question:
@@ -158,7 +158,7 @@ def render_resume_prompt(
 def list_parked(store: Store) -> list[ParkedTask]:
     """Return all currently-parked tasks as ParkedTask instances.
 
-    Uses `tasks.updated_at` as the `parked_at` proxy — when a task is parked,
+    Uses `tasks.updated_at` as the `parked_at` proxy - when a task is parked,
     the store sets updated_at to the same timestamp written into
     parked_questions. Tasks whose question column is empty (corrupt row) are
     given a placeholder so the ParkedTask validator does not reject them.
@@ -189,7 +189,7 @@ def list_parked(store: Store) -> list[ParkedTask]:
 # ---------------------------------------------------------------------------
 
 
-# Distinct from triage's NOCTURNE_SKIP_MARKER — questions and skips are different
+# Distinct from triage's NOCTURNE_SKIP_MARKER - questions and skips are different
 # event classes and must not collide on the gh comment-search filter.
 QUESTION_MARKER = "<!-- nocturne-question -->"
 
@@ -331,7 +331,7 @@ def build_hitl_graph(cfg: Config, store: Store):  # type: ignore[no-untyped-def]
         attempt = state.get("attempt", 0) + 1
         try:
             result = opencode_run(task, Path(task.checkout_path), cfg_local)
-        except Exception as exc:  # noqa: BLE001 — defensive
+        except Exception as exc:  # noqa: BLE001 - defensive
             logger.warning("opencode_run raised in HITL graph: %s", exc)
             result = OpenCodeResult(
                 exit_code=-1,
@@ -477,5 +477,5 @@ __all__ = [
     "resume_with_answer",
 ]
 
-# Silence the unused-import warning for `cast` — kept available for tests/IDEs.
+# Silence the unused-import warning for `cast` - kept available for tests/IDEs.
 _ = cast

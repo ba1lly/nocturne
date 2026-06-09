@@ -269,7 +269,7 @@ echo ""
 # TEST 3: DISCORD PARKED E2E (DEFERRED)
 # ============================================================================
 
-echo "=== Test 3: Discord parked E2E (deferred — harness present, requires sandbox state + DISCORD env) ==="
+echo "=== Test 3: Discord parked E2E (deferred - harness present, requires sandbox state + DISCORD env) ==="
 echo "Full implementation would:"
 echo "  1. Start daemon"
 echo "  2. Wait for Issue #3 (AMBIGUOUS) to be parked"
@@ -277,7 +277,7 @@ echo "  3. Fetch latest message via: .venv/bin/python tests/discord_e2e_harness.
 echo "  4. Reply via harness"
 echo "  5. Wait for Issue #3 status → done"
 echo "  6. Assert PR created"
-echo "(Test 3 implementation in tests/m4_acceptance.py — invoke via NOCTURNE_RUN_M4=1 pytest tests/m4_acceptance.py)"
+echo "(Test 3 implementation in tests/m4_acceptance.py - invoke via NOCTURNE_RUN_M4=1 pytest tests/m4_acceptance.py)"
 echo ""
 
 # ============================================================================
@@ -293,7 +293,7 @@ echo ""
 # ============================================================================
 
 echo "=== Test 5: Discord commands (deferred) ==="
-echo "(Test 5 implementation in tests/m4_acceptance.py — drives bot tree via harness)"
+echo "(Test 5 implementation in tests/m4_acceptance.py - drives bot tree via harness)"
 echo ""
 
 # ============================================================================

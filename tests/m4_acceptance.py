@@ -1,13 +1,13 @@
-"""M4 acceptance test — daemon + Discord + SIGKILL recovery + issue-closed abort.
+"""M4 acceptance test - daemon + Discord + SIGKILL recovery + issue-closed abort.
 
 Skipped by default; opt-in via env var NOCTURNE_RUN_M4=1.
 
 This test exercises the complete M4 acceptance criteria:
   1. Daemon single-cycle + SIGTERM clean shutdown (bash script)
   2. SIGKILL recovery (bash script)
-  3. Discord parked E2E — daemon parks Issue #3, harness fetches message, replies, task resumes to done
-  4. Issue closed mid-task abort — create issue, close it mid-execution, assert aborted status
-  5. Discord commands — drive each slash command via harness; verify behavior
+  3. Discord parked E2E - daemon parks Issue #3, harness fetches message, replies, task resumes to done
+  4. Issue closed mid-task abort - create issue, close it mid-execution, assert aborted status
+  5. Discord commands - drive each slash command via harness; verify behavior
 """
 
 import json
@@ -72,22 +72,22 @@ def preflight_checks():
 def test_m4_discord_parked_e2e(state_dir):
     """Test 3: Daemon parks Issue #3, harness fetches message, replies, task resumes to done.
 
-    Implementation outline — actual execution requires DISCORD_TOKEN + sandbox state.
+    Implementation outline - actual execution requires DISCORD_TOKEN + sandbox state.
     """
-    pytest.skip("Implementation deferred — requires live env per plan Task 36 pattern")
+    pytest.skip("Implementation deferred - requires live env per plan Task 36 pattern")
 
 
 def test_m4_issue_closed_mid_task_abort(state_dir):
     """Test 4: Create a sleep-test issue, close it mid-execution, assert aborted status.
 
-    Implementation outline — actual execution requires live env.
+    Implementation outline - actual execution requires live env.
     """
-    pytest.skip("Implementation deferred — requires live env")
+    pytest.skip("Implementation deferred - requires live env")
 
 
 def test_m4_discord_commands_via_harness(state_dir):
     """Test 5: Drive each slash command via harness; verify behavior.
 
-    Implementation outline — actual execution requires live env + bot tree access.
+    Implementation outline - actual execution requires live env + bot tree access.
     """
-    pytest.skip("Implementation deferred — requires live env")
+    pytest.skip("Implementation deferred - requires live env")

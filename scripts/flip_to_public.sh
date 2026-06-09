@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Task 24 — flip the Nocturne repo to PUBLIC.
+# Task 24 - flip the Nocturne repo to PUBLIC.
 #
 # Preconditions (enforced by this script):
 #   1. M2 live acceptance must have passed (scripts/m2_acceptance.sh exited 0)
@@ -29,7 +29,7 @@ Usage: flip_to_public.sh [options]
   --owner OWNER           GitHub owner (default: ba1lly)
   --repo REPO             Repo name (default: nocturne)
   --confirm               Skip the interactive confirmation prompt
-  --skip-secret-scan      DANGEROUS — bypass the secret value scan (do not use
+  --skip-secret-scan      DANGEROUS - bypass the secret value scan (do not use
                           unless you've manually audited git history)
 EOF
       exit 0
@@ -49,7 +49,7 @@ gh auth status >/dev/null 2>&1 || { echo "FAIL: gh not authed"; exit 1; }
 CURRENT=$(gh repo view "$FULL" --json visibility --jq '.visibility' 2>/dev/null || echo "UNKNOWN")
 echo "Current visibility of $FULL: $CURRENT"
 if [ "$CURRENT" = "PUBLIC" ]; then
-  echo "Already PUBLIC — nothing to do."
+  echo "Already PUBLIC - nothing to do."
   exit 0
 fi
 if [ "$CURRENT" != "PRIVATE" ]; then
@@ -60,7 +60,7 @@ fi
 echo ""
 echo ">>> Secret-value scan (deny patterns target literal secret VALUES)"
 if $SKIP_SECRET_SCAN; then
-  echo "  ⚠ --skip-secret-scan set — bypassing scan (caller's responsibility)"
+  echo "  ⚠ --skip-secret-scan set - bypassing scan (caller's responsibility)"
 else
   git log --all -p > /tmp/nocturne-history.txt
   grep -nE '(gho_[A-Za-z0-9]{30,}|ghp_[A-Za-z0-9]{30,}|sk-(proj-)?[A-Za-z0-9]{40,}|sk-ant-[A-Za-z0-9]{40,}|AKIA[0-9A-Z]{16}|xox[bap]-[A-Za-z0-9-]{30,}|AIza[0-9A-Za-z_-]{35})' \
@@ -115,7 +115,7 @@ echo "Visibility now: $NEW"
 echo ""
 echo ">>> Tagging commit m2"
 if git rev-parse m2 >/dev/null 2>&1; then
-  echo "Tag m2 already exists locally — skipping creation"
+  echo "Tag m2 already exists locally - skipping creation"
 else
   git tag -a m2 -m "M2 acceptance: triage + multi-issue + flipped to public"
   git push origin m2 2>&1 | tee -a "$EVIDENCE_DIR/task-24-flip.log"

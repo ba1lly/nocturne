@@ -1,13 +1,13 @@
-"""Triage classifier — DOABLE / SKIP / NEED_INPUT with priority ordering.
+"""Triage classifier - DOABLE / SKIP / NEED_INPUT with priority ordering.
 
 Combines Task 20 (classification + LangGraph node) and Task 21 (idempotent
 skip-comment posting). The public surface:
 
-  - classify(issue, cfg)       — single-issue LLM classification (fallback SKIP)
-  - already_commented_skip(...) — gh-based marker check (returns False on gh error)
-  - post_skip_comment(...)     — idempotent + non-blocking comment poster
-  - triage_batch(issues, cfg)   — classify + post skip comments + sort
-  - build_triage_graph()       — LangGraph wiring (single-node M2 form)
+  - classify(issue, cfg)       - single-issue LLM classification (fallback SKIP)
+  - already_commented_skip(...) - gh-based marker check (returns False on gh error)
+  - post_skip_comment(...)     - idempotent + non-blocking comment poster
+  - triage_batch(issues, cfg)   - classify + post skip comments + sort
+  - build_triage_graph()       - LangGraph wiring (single-node M2 form)
 
 Outcome semantics are locked to TriageOutcome's Literal["DOABLE","SKIP","NEED_INPUT"]
 via pydantic validation. Any out-of-band outcome (PARTIAL, SPLIT, ESCALATE, ...)
@@ -28,7 +28,7 @@ from nocturne.models import Task, TriageOutcome, TriageResult
 logger = get_logger("nocturne.triage")
 
 # Marker used to detect Nocturne-authored skip comments (idempotency).
-# Exact form is part of the public contract — do NOT add trailing whitespace.
+# Exact form is part of the public contract - do NOT add trailing whitespace.
 NOCTURNE_SKIP_MARKER = "<!-- nocturne-skip -->"
 
 def _load_rubric() -> str:
@@ -85,7 +85,7 @@ def classify(issue: Task, cfg: Config) -> TriageResult:
 
         parsed = json.loads(content)
 
-        # Clamp priority into pydantic's [0, 100] range — the rubric instructs
+        # Clamp priority into pydantic's [0, 100] range - the rubric instructs
         # the model to stay in range; clamping keeps us robust to model drift
         # without losing the signal entirely.
         raw_priority = int(parsed.get("priority", 50))
@@ -101,9 +101,9 @@ def classify(issue: Task, cfg: Config) -> TriageResult:
             priority=priority,
             reason=reason,
         )
-    except Exception as exc:  # noqa: BLE001 — fallback path is intentional
+    except Exception as exc:  # noqa: BLE001 - fallback path is intentional
         logger.warning(
-            "triage parse error for %s: %s — falling back to SKIP", issue.id, exc
+            "triage parse error for %s: %s - falling back to SKIP", issue.id, exc
         )
         return TriageResult(
             task_id=issue.id,
@@ -155,7 +155,7 @@ def post_skip_comment(repo_slug: str, issue_number: int, reason: str) -> None:
     """
     if already_commented_skip(repo_slug, issue_number):
         logger.info(
-            "skip comment already exists on %s#%s — not posting again",
+            "skip comment already exists on %s#%s - not posting again",
             repo_slug,
             issue_number,
         )
@@ -210,7 +210,7 @@ def triage_batch(
     Skip-comment posting is best-effort: any exception raised by
     post_skip_comment is logged and swallowed so the rest of the batch
     continues to be classified. When dry_run=True, classification still
-    runs but skip comments are NOT posted to GitHub — preserves dry-run's
+    runs but skip comments are NOT posted to GitHub - preserves dry-run's
     "no external side effects" contract.
     """
     results: list[tuple[Task, TriageResult]] = []
@@ -220,7 +220,7 @@ def triage_batch(
         if tr.outcome == "SKIP" and not dry_run:
             try:
                 post_skip_comment(task.repo_slug, task.issue_number, tr.reason)
-            except Exception as exc:  # noqa: BLE001 — batch must keep going
+            except Exception as exc:  # noqa: BLE001 - batch must keep going
                 logger.warning(
                     "post_skip_comment unexpectedly raised on %s#%s (swallowed): %s",
                     task.repo_slug,
@@ -262,7 +262,7 @@ def build_triage_graph():  # type: ignore[no-untyped-def]
         from langgraph.graph import END, StateGraph
     except ImportError as exc:
         raise TriageError(
-            "langgraph not installed — install it to use the triage graph"
+            "langgraph not installed - install it to use the triage graph"
         ) from exc
 
     def triage_node(state: TriageState) -> dict[str, list[tuple[Task, TriageResult]]]:

@@ -1,4 +1,4 @@
-"""Tests for nocturne.daemon_recovery — PID-based task reconciliation + worktree prune."""
+"""Tests for nocturne.daemon_recovery - PID-based task reconciliation + worktree prune."""
 from __future__ import annotations
 
 import os
@@ -373,7 +373,7 @@ def test_reconcile_worktrees_prune_failure_continues(
     monkeypatch.setattr("nocturne.daemon_recovery.subprocess.run", fake_run)
 
     cleaned = reconcile_worktrees(cfg)
-    # No cleanup, but no exception raised — function must swallow the prune failure.
+    # No cleanup, but no exception raised - function must swallow the prune failure.
     assert cleaned == []
 
 

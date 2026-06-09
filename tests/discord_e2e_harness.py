@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discord E2E harness — drives the bot tree programmatically for M4 acceptance.
+"""Discord E2E harness - drives the bot tree programmatically for M4 acceptance.
 
 Modes:
   fetch-latest --channel <id> --limit <N>     Print N latest messages as JSON

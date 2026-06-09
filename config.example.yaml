@@ -1,5 +1,5 @@
 github:
-  owner: "ba1lly" # REQUIRED — your GitHub username/org; replace before first run
+  owner: "ba1lly" # REQUIRED - your GitHub username/org; replace before first run
 
 sandbox:
   repo_name: "nocturne-playground" # default; override if you want a different sandbox name
@@ -25,7 +25,7 @@ providers:
 models:
   reasoning: "alibaba-coding-plan/qwen3.6-plus" # used by triage + report (direct API)
   report: "alibaba-coding-plan/qwen3.6-plus"
-  # coding: optional — if omitted, opencode picks its own model from its config.
+  # coding: optional - if omitted, opencode picks its own model from its config.
   # Set only if you want to force a specific model for the coding agent.
 
 opencode:
@@ -40,7 +40,7 @@ repos:
     base: "main"
     verify_cmd: "pytest -q"
     require_new_test: true
-  # - slug: "ba1lly/MEPTools" # DISABLED — promote post-sandbox-acceptance
+  # - slug: "ba1lly/MEPTools" # DISABLED - promote post-sandbox-acceptance
   #   checkout_path: "~/projects/MEPTools"
   #   label: "agent"
   #   base: "main"
@@ -58,8 +58,8 @@ guardrails:
 discord:
   enabled: true
   bot_token_env: "NOCTURNE_DISCORD_TOKEN"
-  channel_id: 0 # REQUIRED — set to your Discord channel ID before running daemon
-  mention_user_id: 0 # REQUIRED — set to your Discord user ID for pings
+  channel_id: 0 # REQUIRED - set to your Discord channel ID before running daemon
+  mention_user_id: 0 # REQUIRED - set to your Discord user ID for pings
 
 daemon:
   poll_interval_sec: 300
@@ -68,9 +68,9 @@ daemon:
 review:
   enabled: true
   budget_attempts: 2
-  severity_floor: "info" # fix EVERY finding — info, low, medium, high, critical
+  severity_floor: "info" # fix EVERY finding - info, low, medium, high, critical
   skill_name: "reviewer" # name of the SKILL.md to invoke (must be installed via 'nocturne skill install')
-  append_only: true # MUST be true — never force-push
+  append_only: true # MUST be true - never force-push
 
 healthcheck:
   enabled: true

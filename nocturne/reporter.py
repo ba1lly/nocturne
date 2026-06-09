@@ -155,7 +155,7 @@ def discord_message(report: RunReport) -> str:
 
     # Append first PR URL if available
     if report.done and report.done[0].pr_url:
-        message += f" — PR: {report.done[0].pr_url}"
+        message += f" - PR: {report.done[0].pr_url}"
 
     # Truncate to 280 chars
     if len(message) > 280:
@@ -181,7 +181,7 @@ def _format_task_report(task: "Task", duration_ms: Optional[int] = None) -> str:
     emoji = _TASK_EMOJI.get(task.status, "•")
     parts = [emoji, f"#{task.issue_number}", (task.title or "")[:50]]
     if task.pr_url:
-        parts.append(f"— PR: {task.pr_url}")
+        parts.append(f"- PR: {task.pr_url}")
     if duration_ms is not None and duration_ms > 0:
         parts.append(f"({timedelta(milliseconds=duration_ms)})")
     text = " ".join(parts)
