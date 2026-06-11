@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
-from nocturne.models import Task, TaskStatus
+from nocturne.models import PRWatch, Task, TaskStatus
 
 _SCHEMA_SQL = Path(__file__).with_name("_schema.sql").read_text(encoding="utf-8")
 
@@ -250,6 +250,67 @@ class Store:
             }
             for r in db_rows
         ]
+
+    # -- PR watches (post-PR feedback loop) ---------------------------------
+
+    def add_pr_watch(self, watch: PRWatch) -> None:
+        row = watch.model_dump(mode="json")
+        with self._conn:
+            _ = self._conn.execute(
+                "INSERT OR REPLACE INTO pr_watches ("
+                + "pr_url, task_id, repo_slug, pr_number, branch, base, state, "
+                + "fix_attempts, last_signature, created_at, updated_at"
+                + ") VALUES ("
+                + ":pr_url, :task_id, :repo_slug, :pr_number, :branch, :base, :state, "
+                + ":fix_attempts, :last_signature, :created_at, :updated_at"
+                + ")",
+                row,
+            )
+
+    def get_pr_watch(self, pr_url: str) -> PRWatch | None:
+        db_row = cast(
+            sqlite3.Row | None,
+            self._conn.execute("SELECT * FROM pr_watches WHERE pr_url = ?", (pr_url,)).fetchone(),
+        )
+        if db_row is None:
+            return None
+        return PRWatch.model_validate({key: db_row[key] for key in db_row.keys()})
+
+    def list_active_pr_watches(self) -> list[PRWatch]:
+        db_rows = cast(list[sqlite3.Row], self._conn.execute(
+            "SELECT * FROM pr_watches WHERE state = 'watching' ORDER BY created_at, pr_url"
+        ).fetchall())
+        return [PRWatch.model_validate({key: row[key] for key in row.keys()}) for row in db_rows]
+
+    def update_pr_watch(
+        self,
+        pr_url: str,
+        *,
+        state: str | None = None,
+        fix_attempts: int | None = None,
+        last_signature: str | None = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list[object] = []
+        if state is not None:
+            sets.append("state = ?")
+            params.append(state)
+        if fix_attempts is not None:
+            sets.append("fix_attempts = ?")
+            params.append(fix_attempts)
+        if last_signature is not None:
+            sets.append("last_signature = ?")
+            params.append(last_signature)
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        params.append(_now())
+        params.append(pr_url)
+        with self._conn:
+            _ = self._conn.execute(
+                f"UPDATE pr_watches SET {', '.join(sets)} WHERE pr_url = ?",
+                params,
+            )
 
     def close(self) -> None:
         self._conn.close()

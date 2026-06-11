@@ -39,29 +39,43 @@ from nocturne.opencode_driver import (
 )
 
 
+class _FakeStream:
+    """Minimal readable text stream: yields its data once, then EOF ('')."""
+
+    def __init__(self, data: str) -> None:
+        self._data = data
+        self._done = False
+
+    def read(self, _size: int = -1) -> str:
+        if self._done:
+            return ""
+        self._done = True
+        return self._data
+
+
 class FakeProc:
     def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0, pid: int = 42) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
+        self.stdout = _FakeStream(stdout)
+        self.stderr = _FakeStream(stderr)
         self.returncode = returncode
         self.pid = pid
         self.killed = False
-        self.communicate_calls: list[float | int | None] = []
+        self.wait_calls: list[float | int | None] = []
 
-    def communicate(self, timeout: float | int | None = None) -> tuple[str, str]:
-        self.communicate_calls.append(timeout)
-        return self.stdout, self.stderr
+    def wait(self, timeout: float | int | None = None) -> int:
+        self.wait_calls.append(timeout)
+        return self.returncode
 
     def kill(self) -> None:
         self.killed = True
 
 
 class TimeoutProc(FakeProc):
-    def communicate(self, timeout: float | int | None = None) -> tuple[str, str]:
-        self.communicate_calls.append(timeout)
-        if len(self.communicate_calls) == 1:
+    def wait(self, timeout: float | int | None = None) -> int:
+        self.wait_calls.append(timeout)
+        if len(self.wait_calls) == 1:
             raise subprocess.TimeoutExpired(cmd=["opencode"], timeout=timeout)
-        return "drained stdout", "drained stderr"
+        return self.returncode
 
 
 @pytest.fixture
@@ -227,17 +241,50 @@ def test_run_captures_pid_before_communicate(monkeypatch: pytest.MonkeyPatch, ta
     order: list[str] = []
 
     class OrderingProc(FakeProc):
-        def communicate(self, timeout: float | int | None = None) -> tuple[str, str]:
-            order.append("communicate")
-            return super().communicate(timeout)
+        def wait(self, timeout: float | int | None = None) -> int:
+            order.append("wait")
+            return super().wait(timeout)
 
     proc = OrderingProc(stdout='{"type":"text","text":"done"}\n', pid=42)
     patch_popen(monkeypatch, proc)
 
     result = run(task, tmp_path, cfg, on_pid_started=lambda pid: order.append(f"pid:{pid}"))
 
-    assert order == ["pid:42", "communicate"]
+    assert order == ["pid:42", "wait"]
     assert result.pid == 42
+
+
+def test_drain_capped_retains_up_to_cap_and_flags_truncation() -> None:
+    from nocturne.opencode_driver import _drain_capped
+
+    sink: dict[str, object] = {"parts": [], "truncated": False}
+    _drain_capped(_FakeStream("a" * 100), 40, sink)
+
+    assert sink["truncated"] is True
+    assert len("".join(sink["parts"])) == 40  # never holds more than the cap
+
+
+def test_drain_capped_under_cap_keeps_everything() -> None:
+    from nocturne.opencode_driver import _drain_capped
+
+    sink: dict[str, object] = {"parts": [], "truncated": False}
+    _drain_capped(_FakeStream("hello"), 1000, sink)
+
+    assert sink["truncated"] is False
+    assert "".join(sink["parts"]) == "hello"
+
+
+def test_run_flags_output_overflow_as_error(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:
+    """A runaway agent that overflows the output cap must fail the attempt, not
+    be treated as a successful run on truncated NDJSON."""
+    monkeypatch.setattr("nocturne.opencode_driver._MAX_OUTPUT_CHARS", 20)
+    big = json.dumps({"type": "text", "text": "x" * 200}) + "\n"
+    proc = FakeProc(stdout=big, returncode=0)
+    patch_popen(monkeypatch, proc)
+
+    result = run(task, tmp_path, cfg)
+
+    assert {"type": "output_truncated"} in result.error_events
 
 
 def test_timeout_kills_process(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:
@@ -247,7 +294,7 @@ def test_timeout_kills_process(monkeypatch: pytest.MonkeyPatch, task: Task, cfg:
     result = run(task, tmp_path, cfg)
 
     assert proc.killed is True
-    assert proc.communicate_calls == [60, None]
+    assert proc.wait_calls == [60, None]
     assert result.exit_code == -1
     assert result.pid == 99
     assert result.error_events == [{"type": "timeout"}]
@@ -266,6 +313,52 @@ def test_run_success_parses_stdout_without_sentinel(monkeypatch: pytest.MonkeyPa
     assert result.events == [{"type": "text", "text": "done"}]
     assert result.sentinel_seen is False
     assert result.error_events == []
+
+
+def test_run_scrubs_github_credentials_from_child_env(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path
+) -> None:
+    """opencode runs over attacker-influenceable issue text, so the subprocess
+    must NOT inherit GitHub write tokens, and gh must be redirected at an
+    isolated config dir so it cannot read the operator's stored auth."""
+    monkeypatch.setenv("GH_TOKEN", "ghp_supersecret")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh_other_secret")
+    monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "ent_secret")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
+    monkeypatch.setenv("SSH_AGENT_PID", "4321")
+    proc = FakeProc(stdout=json.dumps({"type": "text", "text": "done"}) + "\n", returncode=0)
+    captured = patch_popen(monkeypatch, proc)
+
+    run(task, tmp_path, cfg)
+
+    child_env = captured["kwargs"]["env"]
+    assert "GH_TOKEN" not in child_env
+    assert "GITHUB_TOKEN" not in child_env
+    assert "GH_ENTERPRISE_TOKEN" not in child_env
+    # ssh-agent forwarding is denied so the agent can't push as the operator.
+    assert "SSH_AUTH_SOCK" not in child_env
+    assert "SSH_AGENT_PID" not in child_env
+    # gh pointed at a throwaway empty config dir, not the operator's real one.
+    assert child_env["GH_CONFIG_DIR"]
+    assert "nocturne-gh-isolated" in child_env["GH_CONFIG_DIR"]
+    # SSH git auth neutralised (no agent, no on-disk key, no prompts).
+    assert "IdentityAgent=none" in child_env["GIT_SSH_COMMAND"]
+    assert "BatchMode=yes" in child_env["GIT_SSH_COMMAND"]
+    assert child_env["GIT_TERMINAL_PROMPT"] == "0"
+    # The coding provider key is still injected so opencode can reach its model.
+    assert child_env["OPENCODE_PROVIDER_API_KEY"]
+
+
+def test_run_isolated_gh_config_dir_is_cleaned_up(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path
+) -> None:
+    proc = FakeProc(stdout=json.dumps({"type": "text", "text": "done"}) + "\n", returncode=0)
+    captured = patch_popen(monkeypatch, proc)
+
+    run(task, tmp_path, cfg)
+
+    # The temp gh config dir must not leak onto disk after the run returns.
+    assert not Path(captured["kwargs"]["env"]["GH_CONFIG_DIR"]).exists()
 
 
 def test_run_sentinel_path_populates_question(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:

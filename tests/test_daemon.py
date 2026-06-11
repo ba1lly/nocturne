@@ -563,3 +563,54 @@ async def test_wait_for_resume_returns_true_when_running(fake_cfg, inmem_store):
     result = await d.wait_for_resume(timeout=0.05)
     assert result is True
 
+
+
+@pytest.mark.asyncio
+async def test_poll_pr_reactions_accounts_tokens_and_notifies(fake_cfg, inmem_store, monkeypatch):
+    """The daemon folds reaction token spend into its budget and posts the
+    collected notices to Discord."""
+    from types import SimpleNamespace
+
+    from nocturne.daemon import Daemon
+
+    fake_cfg.reactions.enabled = True
+
+    watch = SimpleNamespace(pr_number=9, repo_slug="o/r", pr_url="https://github.com/o/r/pull/9")
+
+    def fake_poll(cfg, store, notify):
+        notify(watch, "ci_fix_pushed", "Pushed a fix.")
+        return {"checked": 1, "actions": 1, "tokens": 7000, "errors": []}
+
+    monkeypatch.setattr("nocturne.reactions.poll_and_react", fake_poll)
+
+    sent: list[str] = []
+
+    class FakeBot:
+        async def send_status_msg(self, text: str):
+            sent.append(text)
+            return 1
+
+    d = Daemon(fake_cfg, inmem_store, bot=FakeBot())
+    summary: dict = {"errors": []}
+    await d._poll_pr_reactions(summary)
+
+    assert d.tokens_used == 7000
+    assert summary["reactions_actions"] == 1
+    assert len(sent) == 1 and "ci_fix_pushed" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_poll_pr_reactions_noop_when_disabled(fake_cfg, inmem_store, monkeypatch):
+    from nocturne.daemon import Daemon
+
+    assert fake_cfg.reactions.enabled is False
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "nocturne.reactions.poll_and_react",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {},
+    )
+
+    d = Daemon(fake_cfg, inmem_store)
+    await d._poll_pr_reactions({"errors": []})
+
+    assert called["n"] == 0  # disabled: never even polls

@@ -27,6 +27,7 @@ from nocturne.config import (
 from nocturne.guardrails import (
     GuardrailViolation,
     WorktreeContext,
+    assert_no_sensitive_paths,
     assert_not_main_branch,
     check_repo_allowed,
     check_token_budget,
@@ -34,6 +35,7 @@ from nocturne.guardrails import (
     enforce_no_auto_merge,
     enforce_no_dangerous_opencode_flags,
     enforce_no_force_push,
+    find_sensitive_paths,
 )
 
 
@@ -233,3 +235,61 @@ def test_worktree_context_skips_assertion_on_exception(monkeypatch: pytest.Monke
             raise RuntimeError("boom")
 
     assert calls == []
+
+
+# --------------------------------------------------------------------------------------
+# Sensitive-path scope guard (prompt-injection defence)
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", [
+    ".github/workflows/release.yml",
+    ".github/workflows/ci.yaml",
+    ".github/actions/deploy/action.yml",
+    ".env",
+    ".env.production",
+    "config/.env.local",
+    "deploy/id_rsa",
+    "keys/server.pem",
+    "secrets/tls.key",
+    "service.p12",
+    "home/.ssh/authorized_keys",
+    "infra/.aws/credentials",
+    ".npmrc",
+    "nested/dir/.netrc",
+    "credentials",
+])
+def test_find_sensitive_paths_flags_dangerous(path: str) -> None:
+    assert find_sensitive_paths([path]) == [path]
+
+
+@pytest.mark.parametrize("path", [
+    "src/main.py",
+    "tests/test_thing.py",
+    "README.md",
+    ".github/ISSUE_TEMPLATE/bug.md",
+    ".github/dependabot.yml",
+    "docs/env.md",
+    "src/environment.py",
+    "package.json",
+    "keystore.py",
+])
+def test_find_sensitive_paths_allows_normal(path: str) -> None:
+    assert find_sensitive_paths([path]) == []
+
+
+def test_assert_no_sensitive_paths_raises_on_workflow() -> None:
+    with pytest.raises(GuardrailViolation) as excinfo:
+        assert_no_sensitive_paths(["src/ok.py", ".github/workflows/evil.yml"])
+    assert ".github/workflows/evil.yml" in str(excinfo.value)
+
+
+def test_assert_no_sensitive_paths_passes_clean_diff() -> None:
+    assert_no_sensitive_paths(["src/a.py", "tests/b.py", "README.md"])
+
+
+def test_assert_no_sensitive_paths_lists_all_offenders() -> None:
+    with pytest.raises(GuardrailViolation) as excinfo:
+        assert_no_sensitive_paths([".env", "ok.py", "id_ed25519"])
+    msg = str(excinfo.value)
+    assert ".env" in msg and "id_ed25519" in msg

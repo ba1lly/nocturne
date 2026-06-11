@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
+from nocturne._sandbox import scrubbed_env
 from nocturne.models import Task, VerifyResult
 
 TEST_PATH_REGEX = re.compile(r"(^|/)(test_[^/]+\.py$|[^/]+_test\.py$|tests?/)")
@@ -54,7 +56,7 @@ def diff_includes_test(worktree: Path, base: str = "main") -> bool:
     return False
 
 
-def _collect_diagnostics(worktree: Path, verify_cmd: str) -> str:
+def _collect_diagnostics(worktree: Path, verify_cmd: str, env: dict[str, str]) -> str:
     outputs: list[str] = [f"verify_cmd={verify_cmd}"]
     commands = [
         ["python3", "-m", "pytest", "--version"],
@@ -63,7 +65,7 @@ def _collect_diagnostics(worktree: Path, verify_cmd: str) -> str:
     ]
     for cmd in commands:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(worktree), check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(worktree), check=False, env=env)
             outputs.append(f"$ {' '.join(cmd)}")
             if proc.stdout:
                 outputs.append(proc.stdout.rstrip())
@@ -75,8 +77,13 @@ def _collect_diagnostics(worktree: Path, verify_cmd: str) -> str:
     return "\n".join(part for part in outputs if part)
 
 
-def verify(task: Task, worktree: Path) -> VerifyResult:
+def verify(task: Task, worktree: Path, *, strip_env: Iterable[str] = ()) -> VerifyResult:
     timeout = getattr(task, "verify_timeout", None) or 600
+    # verify runs agent-authored test code: strip the operator's git remote
+    # credentials (and, via strip_env, the model provider keys it has no need
+    # for) so a malicious test cannot exfiltrate them. Network egress is closed
+    # by the OS-level sandbox, not here.
+    env = scrubbed_env(strip=strip_env)
     try:
         proc = subprocess.run(
             task.verify_cmd,
@@ -85,6 +92,7 @@ def verify(task: Task, worktree: Path) -> VerifyResult:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return VerifyResult(
@@ -103,7 +111,7 @@ def verify(task: Task, worktree: Path) -> VerifyResult:
     if exit_code != 0:
         reason = f"verify_cmd failed (exit {exit_code})"
         if len(stdout + stderr) < 50:
-            diagnostics = _collect_diagnostics(worktree, task.verify_cmd)
+            diagnostics = _collect_diagnostics(worktree, task.verify_cmd, env)
             stderr = "\n".join(part for part in [stderr.rstrip(), diagnostics] if part)
         return VerifyResult(
             passed=False,

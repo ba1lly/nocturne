@@ -157,6 +157,42 @@ class Daemon:
         self._tokens_used += result_task.token_usage
         return self._is_budget_exhausted()
 
+    async def _poll_pr_reactions(self, cycle_summary: dict[str, Any]) -> None:
+        """Poll open-PR watches and react (fix CI / address review / notify).
+
+        Runs the (blocking) reaction logic in a thread; Discord notices are
+        collected during the run and posted afterwards from the event loop.
+        """
+        if not self.cfg.reactions.enabled:
+            return
+
+        notices: list[tuple[Any, str, str]] = []
+
+        def notify(watch: Any, event: str, detail: str) -> None:
+            notices.append((watch, event, detail))
+
+        try:
+            from nocturne.reactions import poll_and_react
+            summary = await asyncio.to_thread(poll_and_react, self.cfg, self.store, notify)
+        except Exception as e:
+            logger.warning("PR reaction poll failed (non-blocking): %s", e)
+            return
+
+        self._tokens_used += int(summary.get("tokens", 0))
+        cycle_summary["reactions_checked"] = summary.get("checked", 0)
+        cycle_summary["reactions_actions"] = summary.get("actions", 0)
+        if summary.get("errors"):
+            cycle_summary["errors"].extend(summary["errors"])
+
+        if self.bot is not None:
+            for watch, event, detail in notices:
+                try:
+                    await self.bot.send_status_msg(
+                        f"PR #{watch.pr_number} ({watch.repo_slug}) [{event}]: {detail}\n{watch.pr_url}"
+                    )
+                except Exception as e:
+                    logger.warning("reaction notify failed (non-blocking): %s", e)
+
     async def run_one_cycle(self) -> dict[str, Any]:
         """Execute ONE full poll cycle across all repos. Returns a summary dict.
 
@@ -252,6 +288,10 @@ class Daemon:
 
             if cycle_summary.get("budget_exhausted"):
                 break
+
+        # Post-PR feedback loop: shepherd already-open PRs (fix CI, address
+        # review comments, notify when ready). Never merges.
+        await self._poll_pr_reactions(cycle_summary)
 
         cycle_ended_at = datetime.now(timezone.utc)
         self._last_poll_at = cycle_ended_at

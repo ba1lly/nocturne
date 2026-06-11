@@ -32,6 +32,9 @@ opencode:
   command: "opencode"
   timeout_min: 25
   worktree_root: "/tmp/nocturne"
+  # Reap failed/aborted worktrees older than this (hours) so they can't fill the
+  # disk. Kept long enough for post-mortem inspection; 0 disables reaping.
+  worktree_ttl_hours: 48
 
 repos:
   - slug: "ba1lly/nocturne-playground" # GitHub owner/repo for gh + PR URLs
@@ -76,3 +79,13 @@ healthcheck:
 persona:
   enabled: true
   soul_path: "~/.config/nocturne/soul.md" # optional; if file missing, no persona injection. Max 8192 chars; ConfigError on oversize. Manage via 'nocturne soul show/set/edit'.
+
+reactions:
+  # Post-PR feedback loop: after Nocturne opens a PR, keep shepherding it toward
+  # merge-ready. It NEVER merges - "ready" only notifies you to merge yourself.
+  enabled: false
+  fix_failing_ci: true          # re-dispatch the agent to fix failing CI
+  address_review_comments: true # address a reviewer's "changes requested"
+  notify_when_ready: true       # ping when approved + green (does NOT merge)
+  max_fix_attempts: 3           # autonomous fix attempts per PR before escalating
+  watch_ttl_hours: 168          # stop watching a PR after this long

@@ -14,8 +14,13 @@ from nocturne.guardrails import (
     check_repo_allowed,
     check_wallclock,
 )
-from nocturne.models import OpenCodeResult, ParkedTask, RunReport, Task, TriageResult
-from nocturne.sources.github_issues import fetch_eligible, get_issue_state
+from nocturne.models import OpenCodeResult, ParkedTask, PRWatch, RunReport, Task, TriageResult
+from nocturne.sources.github_issues import (
+    fetch_eligible,
+    find_blocking_open_pr,
+    get_issue_snapshot,
+)
+from nocturne.sources.github_pr import parse_pr_number
 from nocturne.store import Store
 from nocturne.triage import triage_batch
 
@@ -90,6 +95,124 @@ def _read_pr_body(worktree: Path, task: Task) -> tuple[str, str]:
     return title, body
 
 
+def _check_issue_drift(task: Task, repo_cfg: RepoConfig) -> str | None:
+    """Re-fetch live issue state immediately before PR creation and return a
+    human-readable reason to abort, or None to proceed.
+
+    Catches the three things a maintainer can do to an issue while opencode is
+    running for many minutes: close it, pull the trigger label (signalling "I'm
+    handling this"), or open a PR that already resolves it. On a transient gh
+    failure we return None (proceed) - open_pr is the final backstop, and a
+    network blip must not strand otherwise-finished work.
+    """
+    log = get_logger("nocturne.orchestrator")
+    try:
+        snapshot = get_issue_snapshot(task.repo_slug, task.issue_number)
+    except IssueNotFound:
+        return "issue not found (deleted or transferred)"
+    except GhError as e:
+        log.warning("task=%s issue-state recheck failed (proceeding): %s", task.id, e)
+        return None
+
+    if snapshot.state == "CLOSED":
+        return "issue closed during execution"
+    if repo_cfg.label and repo_cfg.label not in snapshot.labels:
+        return f"trigger label {repo_cfg.label!r} removed during execution"
+
+    try:
+        blocking_pr = find_blocking_open_pr(task.repo_slug, task.issue_number)
+    except GhError as e:
+        log.warning("task=%s linked-PR recheck failed (proceeding): %s", task.id, e)
+        blocking_pr = None
+    if blocking_pr is not None:
+        return f"open PR #{blocking_pr} already addresses this issue"
+
+    return None
+
+
+def _provider_key_envs(cfg: Config) -> set[str]:
+    """Provider API key env-var names to strip from the verify subprocess
+    (it runs agent-authored test code and needs no model access)."""
+    names = {p.api_key_env for p in cfg.providers.values()}
+    names.add("OPENCODE_PROVIDER_API_KEY")
+    return names
+
+
+def _register_pr_watch(task: Task, pr_url: str, store: Store) -> None:
+    now = datetime.now(timezone.utc)
+    store.add_pr_watch(
+        PRWatch(
+            pr_url=pr_url,
+            task_id=task.id,
+            repo_slug=task.repo_slug,
+            pr_number=parse_pr_number(pr_url),
+            branch=task.branch,
+            base=task.base,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def process_pr_reaction(
+    watch: PRWatch, kind: str, feedback: str, cfg: Config, store: Store
+) -> tuple[bool, int]:
+    """Re-dispatch the agent onto an open PR's branch to fix CI or address
+    review comments. Returns (pushed_a_fix, tokens_used). Opens NO new PR;
+    pushes a fast-forward commit onto the existing branch.
+    """
+    from nocturne.prompts.render import render_pr_fix_prompt
+
+    log = get_logger("nocturne.orchestrator")
+    task = store.get_task(watch.task_id)
+    if task is None:
+        log.warning("pr-reaction: task %s missing for PR %s", watch.task_id, watch.pr_url)
+        return (False, 0)
+
+    # Fixes need not add a new test (we're addressing feedback, not adding scope).
+    task = task.model_copy(update={"branch": watch.branch, "require_new_test": False})
+
+    safe_slug = task.repo_slug.replace("/", "__")
+    wt_path = Path(cfg.opencode.worktree_root) / f"{safe_slug}-pr-{watch.pr_number}-fix-{watch.fix_attempts}"
+    wt = gitwork.make_worktree_from_branch(Path(task.checkout_path), watch.branch, wt_path)
+
+    tokens = 0
+    pushed = False
+    try:
+        with WorktreeContext(wt, expected_base=task.base):
+            prompt = render_pr_fix_prompt(
+                task, pr_number=watch.pr_number, kind=kind, feedback=feedback, cfg=cfg
+            )
+            result = opencode_driver.run(
+                task, wt, cfg,
+                on_pid_started=lambda pid: store.update_pid(task.id, pid),
+                prompt_override=prompt,
+            )
+            tokens = result.token_usage
+            if tokens:
+                store.add_task_tokens(task.id, tokens)
+            if result.sentinel_seen or result.exit_code != 0 or result.error_events:
+                log.warning("pr-reaction: opencode did not produce a clean fix for %s", watch.pr_url)
+                return (False, tokens)
+
+            v = verifier.verify(task, wt, strip_env=_provider_key_envs(cfg))
+            if not v.passed:
+                log.warning("pr-reaction: verify failed for %s (%s)", watch.pr_url, v.reason)
+                return (False, tokens)
+
+            try:
+                gitwork.commit_push_followup(wt, f"Address {kind} feedback on #{watch.pr_number}")
+            except (GuardrailViolation, gitwork.GitworkError) as e:
+                log.warning("pr-reaction: could not push fix for %s: %s", watch.pr_url, e)
+                return (False, tokens)
+            pushed = True
+            log.info("pr-reaction: pushed %s fix for %s", kind, watch.pr_url)
+            return (True, tokens)
+    finally:
+        if pushed:
+            gitwork.cleanup(wt, Path(task.checkout_path))
+
+
 def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Task:
     log = get_logger("nocturne.orchestrator")
 
@@ -105,12 +228,22 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
 
     task.branch = branch_name(task.issue_number, task.attempts)
     worktree_path = _worktree_path_for(task, cfg)
+    # Reap old failed/aborted worktrees so they cannot exhaust disk over time.
+    reaped = gitwork.reap_stale_worktrees(
+        worktree_path.parent, cfg.opencode.worktree_ttl_hours
+    )
+    if reaped:
+        log.info("reaped %s stale worktree(s) under %s", reaped, worktree_path.parent)
     wt = make_worktree(Path(task.checkout_path), task.branch, task.base, worktree_path)
 
     success = False
     pid_callback = lambda pid: store.update_pid(task.id, pid)  # noqa: E731
     last_fail: str | None = None
     result: OpenCodeResult | None = None
+
+    # Provider API keys to strip from the verify subprocess: it runs
+    # agent-authored test code and needs no model access.
+    verify_strip_env = _provider_key_envs(cfg)
 
     try:
         with WorktreeContext(wt, expected_base=task.base):
@@ -133,6 +266,17 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     store.add_task_tokens(task.id, result.token_usage)
                     task.token_usage += result.token_usage
 
+                # Mid-run budget guard: stop retrying a single task once its
+                # cumulative token spend reaches the global budget, so one task
+                # cannot blow far past it across attempts.
+                if task.token_usage >= cfg.guardrails.token_budget:
+                    last_fail = (
+                        f"token budget exhausted "
+                        f"({task.token_usage} >= {cfg.guardrails.token_budget})"
+                    )
+                    log.warning("task=%s %s; stopping retries", task.id, last_fail)
+                    break
+
                 if result.sentinel_seen:
                     log.warning(
                         "sentinel detected on task=%s question=%r",
@@ -153,7 +297,7 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     )
                     continue
 
-                v = verifier.verify(task, wt)
+                v = verifier.verify(task, wt, strip_env=verify_strip_env)
                 if not v.passed:
                     parts: list[str] = [v.stdout or "", "---STDERR---", v.stderr or ""]
                     fail_text = "\n".join(parts)
@@ -168,28 +312,30 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     )
                     continue
 
-                # Task 28: issue-state check between OpenCode exit and PR creation
-                # Metis directive: prevents creating PRs against issues closed mid-execution
-                try:
-                    issue_state = get_issue_state(task.repo_slug, task.issue_number)
-                except IssueNotFound:
-                    log.info("Issue #%s not found (404); treating as aborted", task.issue_number)
-                    issue_state = "CLOSED"
-                except GhError as e:
-                    log.warning("could not check issue state (defaulting to OPEN): %s", e)
-                    issue_state = "OPEN"  # on transient gh failure, proceed (idempotent open_pr handles dup)
-
-                if issue_state == "CLOSED":
+                # Pre-PR drift guard: re-fetch live issue state between opencode
+                # exit and PR creation so we never race a maintainer who closed
+                # the issue, pulled the trigger label, or already opened a PR for
+                # it while opencode was running (potentially many minutes).
+                drift_reason = _check_issue_drift(task, _repo_cfg)
+                if drift_reason is not None:
                     store.update_status(task.id, "aborted")
                     task.status = "aborted"
-                    log.info("Issue #%s closed during execution; aborting without PR", task.issue_number)
-                    success = True  # mark for cleanup branch; treat as graceful exit
-                    break  # exit the attempt loop; finally cleanup still runs
+                    log.info(
+                        "task=%s aborting without PR (issue #%s): %s",
+                        task.id, task.issue_number, drift_reason,
+                    )
+                    success = True  # graceful exit; finally cleanup still runs
+                    break
 
                 # Success path.
                 if not dry_run:
                     pr_title, pr_body = _read_pr_body(wt, task)
-                    commit_push(wt, pr_title, task.base)
+                    try:
+                        commit_push(wt, pr_title, task.base)
+                    except GuardrailViolation as e:
+                        last_fail = f"guardrail blocked commit: {e}"
+                        log.warning("task=%s commit blocked by guardrail: %s", task.id, e)
+                        continue  # retry with feedback; never push the blocked diff
                     pr_url = open_pr(
                         task.repo_slug,
                         task.branch,
@@ -206,6 +352,14 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                 task.status = "done"
                 success = True
                 log.info("task=%s done pr_url=%s", task.id, pr_url)
+
+                # Register the PR for the post-PR feedback loop (CI fixes,
+                # review-comment handling). Best-effort: never fail the task.
+                if not dry_run and cfg.reactions.enabled:
+                    try:
+                        _register_pr_watch(task, pr_url, store)
+                    except Exception as e:
+                        log.warning("could not register PR watch for %s: %s", task.id, e)
 
                 if not dry_run:
                     try:

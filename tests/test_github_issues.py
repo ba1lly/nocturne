@@ -181,6 +181,73 @@ def test_get_issue_state_returns_closed_stripped(monkeypatch):
 
 
 # -----------------------------
+# get_issue_snapshot (drift guard)
+# -----------------------------
+
+def test_get_issue_snapshot_parses_state_and_labels(monkeypatch):
+    from nocturne.sources.github_issues import get_issue_snapshot
+
+    recorder = _patch_subprocess(monkeypatch)
+    recorder.queue_result(FakeGhResult.success(
+        stdout=json.dumps({"state": "OPEN", "labels": [{"name": "agent"}, {"name": "bug"}]})
+    ))
+
+    snap = get_issue_snapshot("owner/repo", 7)
+
+    assert snap.state == "OPEN"
+    assert snap.labels == ("agent", "bug")
+
+
+def test_get_issue_snapshot_handles_empty_labels(monkeypatch):
+    from nocturne.sources.github_issues import get_issue_snapshot
+
+    recorder = _patch_subprocess(monkeypatch)
+    recorder.queue_result(FakeGhResult.success(stdout=json.dumps({"state": "CLOSED", "labels": []})))
+
+    snap = get_issue_snapshot("owner/repo", 7)
+
+    assert snap.state == "CLOSED"
+    assert snap.labels == ()
+
+
+# -----------------------------
+# find_blocking_open_pr (drift guard)
+# -----------------------------
+
+def test_find_blocking_open_pr_matches_closing_keyword(monkeypatch):
+    from nocturne.sources.github_issues import find_blocking_open_pr
+
+    recorder = _patch_subprocess(monkeypatch)
+    recorder.queue_result(FakeGhResult.success(stdout=json.dumps([
+        {"number": 11, "body": "Unrelated work, touches nothing"},
+        {"number": 12, "body": "This fixes #42 and adds tests"},
+    ])))
+
+    assert find_blocking_open_pr("owner/repo", 42) == 12
+
+
+def test_find_blocking_open_pr_returns_none_when_no_match(monkeypatch):
+    from nocturne.sources.github_issues import find_blocking_open_pr
+
+    recorder = _patch_subprocess(monkeypatch)
+    recorder.queue_result(FakeGhResult.success(stdout=json.dumps([
+        {"number": 11, "body": "Closes #420"},   # different issue, must not match #42
+        {"number": 12, "body": "mentions #42 but does not close it"},
+    ])))
+
+    assert find_blocking_open_pr("owner/repo", 42) is None
+
+
+def test_find_blocking_open_pr_handles_empty_list(monkeypatch):
+    from nocturne.sources.github_issues import find_blocking_open_pr
+
+    recorder = _patch_subprocess(monkeypatch)
+    recorder.queue_result(FakeGhResult.success(stdout=""))
+
+    assert find_blocking_open_pr("owner/repo", 42) is None
+
+
+# -----------------------------
 # run_gh retry behavior
 # -----------------------------
 

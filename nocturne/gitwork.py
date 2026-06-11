@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from nocturne.guardrails import enforce_no_force_push
+from nocturne.guardrails import assert_no_sensitive_paths, enforce_no_force_push
 
 
 class GitworkError(Exception):
@@ -15,6 +15,10 @@ class GitworkError(Exception):
 
 
 _PR_URL_RE = re.compile(r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+
+# Hard ceiling on git/gh network calls so an unresponsive GitHub can never hang
+# the daemon's task processing indefinitely.
+_GIT_NETWORK_TIMEOUT_S = 120
 
 _NOCTURNE_ENV = {
     "GIT_AUTHOR_NAME": "Nocturne",
@@ -49,6 +53,36 @@ def prune_worktrees(repo_path: Path) -> None:
         ["git", "-C", str(repo_path), "worktree", "prune"],
         check=True,
     )
+
+
+def reap_stale_worktrees(worktree_root: Path, ttl_hours: int) -> int:
+    """Delete worktree directories under ``worktree_root`` older than ``ttl_hours``.
+
+    Failed/aborted runs intentionally leave their worktree for post-mortem
+    inspection; without a reaper those accumulate until the disk fills. The TTL
+    is far longer than any single run, so an in-flight worktree (recent mtime)
+    is never removed. ``ttl_hours <= 0`` disables reaping. Returns the count
+    removed. Best-effort: never raises.
+    """
+    if ttl_hours <= 0 or not worktree_root.exists():
+        return 0
+    cutoff = time.time() - ttl_hours * 3600
+    removed = 0
+    try:
+        entries = list(worktree_root.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def branch_name(issue_id: int, attempt: int) -> str:
@@ -208,6 +242,17 @@ def commit_push(wt: Path, message: str, base: str) -> None:
     if diff_check.returncode == 0:
         raise GitworkError("commit_push: no changes to commit after reset to base")
 
+    # Scope guard: never ship CI workflows, private keys, or credential files an
+    # injected agent may have planted. Raises GuardrailViolation (caught upstream).
+    staged = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    staged_paths = [line for line in staged.stdout.splitlines() if line.strip()]
+    assert_no_sensitive_paths(staged_paths)
+
     commit_args = [
         "git",
         "-C",
@@ -235,6 +280,84 @@ def commit_push(wt: Path, message: str, base: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        timeout=_GIT_NETWORK_TIMEOUT_S,
+    )
+
+
+def make_worktree_from_branch(repo_path: Path, branch: str, worktree_path: Path) -> Path:
+    """Materialise a worktree on an EXISTING remote branch (for re-dispatching a
+    fix onto an open PR), rather than branching fresh off base like
+    ``make_worktree``.
+    """
+    prune_worktrees(repo_path)
+
+    if worktree_path.exists():
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_path), "worktree", "remove", "--force", str(worktree_path)],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError:
+            # Path exists but isn't a registered worktree; fall through to rmtree.
+            pass
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    fetch = subprocess.run(
+        ["git", "-C", str(repo_path), "fetch", "origin", branch],
+        check=False, capture_output=True, text=True, timeout=_GIT_NETWORK_TIMEOUT_S,
+    )
+    if fetch.returncode != 0:
+        raise GitworkError(f"git fetch origin {branch} failed: {fetch.stderr.strip()}")
+
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "worktree", "add", "-B", branch,
+         str(worktree_path), f"origin/{branch}"],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise GitworkError(
+            f"git worktree add from origin/{branch} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+
+    _install_pre_push_hook(worktree_path)
+    _add_nocturne_local_excludes(worktree_path)
+    return worktree_path
+
+
+def commit_push_followup(wt: Path, message: str) -> None:
+    """Commit current changes ON TOP of the existing branch and fast-forward
+    push to its PR (no reset-to-base, no force). Used by the feedback loop to
+    add a fix commit to an open PR.
+    """
+    subprocess.run(
+        ["git", "-C", str(wt), "add", "-A"],
+        check=True, capture_output=True, text=True,
+    )
+
+    diff_check = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--quiet"],
+        check=False, capture_output=True, text=True,
+    )
+    if diff_check.returncode == 0:
+        raise GitworkError("commit_push_followup: no changes to commit")
+
+    staged = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--name-only"],
+        check=True, capture_output=True, text=True,
+    )
+    assert_no_sensitive_paths([line for line in staged.stdout.splitlines() if line.strip()])
+
+    subprocess.run(
+        ["git", "-C", str(wt), "-c", "user.name=Nocturne",
+         "-c", "user.email=nocturne@noreply.localhost", "commit", "-m", message],
+        check=True, capture_output=True, text=True, env={**os.environ, **_NOCTURNE_ENV},
+    )
+
+    push_args = ["git", "-C", str(wt), "push", "origin", "HEAD"]
+    enforce_no_force_push(push_args)
+    subprocess.run(
+        push_args, check=True, capture_output=True, text=True, timeout=_GIT_NETWORK_TIMEOUT_S,
     )
 
 
@@ -256,7 +379,19 @@ def open_pr(repo: str, branch: str, base: str, title: str, body: str) -> str:
     ]
     last_stderr = ""
     for attempt in range(3):
-        result = subprocess.run(args, check=False, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                args, check=False, capture_output=True, text=True,
+                timeout=_GIT_NETWORK_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # GitHub unresponsive: treat like a transient error so the daemon
+            # never hangs indefinitely on one PR creation.
+            last_stderr = f"gh pr create timed out after {_GIT_NETWORK_TIMEOUT_S}s"
+            if attempt < 2:
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+            break
         last_stderr = result.stderr or ""
 
         if result.returncode == 0:

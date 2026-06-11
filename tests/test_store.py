@@ -343,6 +343,91 @@ def test_daemon_flag_round_trip_and_missing_returns_none(tmp_path: Path) -> None
         store.close()
 
 
+def _pr_watch(pr_url: str = "https://github.com/o/r/pull/1", **over: object):
+    from datetime import datetime, timezone
+
+    from nocturne.models import PRWatch
+
+    data: dict[str, object] = {
+        "pr_url": pr_url,
+        "task_id": "o/r#1",
+        "repo_slug": "o/r",
+        "pr_number": 1,
+        "branch": "nocturne/issue-1-1",
+        "base": "main",
+        "state": "watching",
+        "fix_attempts": 0,
+        "last_signature": None,
+        "created_at": datetime(2026, 6, 8, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 6, 8, tzinfo=timezone.utc),
+    }
+    data.update(over)
+    return PRWatch.model_validate(data)
+
+
+def test_pr_watch_round_trips(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        watch = _pr_watch(fix_attempts=2, last_signature="abc|FAILING|NONE")
+        store.add_pr_watch(watch)  # type: ignore[attr-defined]
+        got = store.get_pr_watch(watch.pr_url)  # type: ignore[attr-defined]
+        assert got == watch
+    finally:
+        store.close()
+
+
+def test_list_active_pr_watches_only_returns_watching(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        store.add_pr_watch(_pr_watch("https://github.com/o/r/pull/1", pr_number=1, state="watching"))  # type: ignore[attr-defined]
+        store.add_pr_watch(_pr_watch("https://github.com/o/r/pull/2", pr_number=2, state="merged"))  # type: ignore[attr-defined]
+        store.add_pr_watch(_pr_watch("https://github.com/o/r/pull/3", pr_number=3, state="watching"))  # type: ignore[attr-defined]
+
+        active = store.list_active_pr_watches()  # type: ignore[attr-defined]
+        assert {w.pr_number for w in active} == {1, 3}
+    finally:
+        store.close()
+
+
+def test_update_pr_watch_partial_fields(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        watch = _pr_watch()
+        store.add_pr_watch(watch)  # type: ignore[attr-defined]
+
+        store.update_pr_watch(watch.pr_url, fix_attempts=1, last_signature="sig1")  # type: ignore[attr-defined]
+        got = store.get_pr_watch(watch.pr_url)  # type: ignore[attr-defined]
+        assert got.fix_attempts == 1 and got.last_signature == "sig1" and got.state == "watching"
+
+        store.update_pr_watch(watch.pr_url, state="escalated")  # type: ignore[attr-defined]
+        got = store.get_pr_watch(watch.pr_url)  # type: ignore[attr-defined]
+        assert got.state == "escalated" and got.fix_attempts == 1  # unchanged fields preserved
+    finally:
+        store.close()
+
+
+def test_pr_watches_table_migrated_onto_legacy_db(tmp_path: Path) -> None:
+    """A DB created before pr_watches existed gains the table on open."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, "
+                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, repo_slug TEXT NOT NULL, "
+                 "checkout_path TEXT NOT NULL, issue_number INTEGER NOT NULL, title TEXT NOT NULL, "
+                 "body TEXT NOT NULL, base TEXT NOT NULL, verify_cmd TEXT NOT NULL, "
+                 "require_new_test INTEGER NOT NULL, coding_model TEXT NOT NULL, branch TEXT NOT NULL, "
+                 "attempts INTEGER NOT NULL DEFAULT 0, pr_url TEXT, question TEXT, answer TEXT, "
+                 "opencode_pid INTEGER)")
+    conn.commit()
+    conn.close()
+
+    store = Store(db_path)
+    try:
+        store.add_pr_watch(_pr_watch())  # type: ignore[attr-defined]
+        assert store.get_pr_watch("https://github.com/o/r/pull/1") is not None  # type: ignore[attr-defined]
+    finally:
+        store.close()
+
+
 def test_concurrent_writes_from_two_connections_do_not_deadlock(tmp_path: Path) -> None:
     db = tmp_path / "n.db"
     barrier = threading.Barrier(2)
