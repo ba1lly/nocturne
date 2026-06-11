@@ -102,6 +102,55 @@ def test_make_worktree_local_exclude_is_idempotent(tmp_worktree: Path, tmp_path:
     assert second.count(".reviews/") == reviews_count
 
 
+def test_make_worktree_excludes_build_artifacts(tmp_worktree: Path, tmp_path: Path) -> None:
+    """A stray __pycache__/*.pyc or tool cache (e.g. from running verify_cmd)
+    must be ignored by git so commit_push's `git add -A` can't sweep it into a
+    generated PR - even when the target repo has no .gitignore."""
+    wt_path = tmp_path / "wt-artifacts"
+    make_worktree(tmp_worktree, "nocturne/issue-11-1", "main", wt_path)
+
+    (wt_path / "src").mkdir(parents=True, exist_ok=True)
+    pycache = wt_path / "src" / "__pycache__"
+    pycache.mkdir(parents=True, exist_ok=True)
+    (pycache / "mod.cpython-312.pyc").write_bytes(b"\x00\x01")
+    (wt_path / ".pytest_cache").mkdir(exist_ok=True)
+    (wt_path / ".pytest_cache" / "CACHEDIR.TAG").write_text("x", encoding="utf-8")
+    (wt_path / ".coverage").write_text("x", encoding="utf-8")
+
+    status = subprocess.run(
+        ["git", "-C", str(wt_path), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "__pycache__" not in status
+    assert ".pyc" not in status
+    assert ".pytest_cache" not in status
+    assert ".coverage" not in status
+
+
+def test_local_exclude_upgrades_from_legacy_two_line_file(tmp_worktree: Path, tmp_path: Path) -> None:
+    """An exclude file written by an older nocturne (only the two internal
+    patterns) gains the build-artifact patterns, and user rules are kept."""
+    wt_path = tmp_path / "wt-upgrade"
+    make_worktree(tmp_worktree, "nocturne/issue-12-1", "main", wt_path)
+
+    exclude_path = Path(subprocess.run(
+        ["git", "-C", str(wt_path), "rev-parse", "--git-path", "info/exclude"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip())
+    if not exclude_path.is_absolute():
+        exclude_path = (wt_path / exclude_path).resolve()
+
+    # Simulate a legacy exclude file + a user-added rule.
+    exclude_path.write_text("my-secret-notes.txt\n.nocturne-pr-body.md\n.reviews/\n", encoding="utf-8")
+    from nocturne.gitwork import _add_nocturne_local_excludes
+    _add_nocturne_local_excludes(wt_path)
+
+    content = exclude_path.read_text(encoding="utf-8")
+    assert "my-secret-notes.txt" in content      # user rule preserved
+    assert "__pycache__/" in content             # new pattern added
+    assert content.count(".nocturne-pr-body.md") == 1  # not duplicated
+
+
 def test_make_worktree_creates_worktree_and_installs_hook(tmp_worktree: Path, tmp_path: Path) -> None:
     wt_path = tmp_path / "wt-1"
     result = make_worktree(tmp_worktree, "nocturne/issue-1-1", "main", wt_path)
