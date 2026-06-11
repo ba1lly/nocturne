@@ -227,6 +227,8 @@ def _drain_capped(stream: IO[str], cap: int, sink: dict[str, object]) -> None:
                 sink["truncated"] = True
             total += len(chunk)
     except (OSError, ValueError):
+        # Pipe closed or decode error while the child is shutting down: stop
+        # draining. Whatever was read so far is what we return.
         pass
 
 

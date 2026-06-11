@@ -298,6 +298,7 @@ def make_worktree_from_branch(repo_path: Path, branch: str, worktree_path: Path)
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError:
+            # Path exists but isn't a registered worktree; fall through to rmtree.
             pass
         shutil.rmtree(worktree_path, ignore_errors=True)
 

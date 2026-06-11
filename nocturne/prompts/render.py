@@ -66,6 +66,25 @@ def render_task_prompt(task: Task, cfg: Config, prior_failure: str | None = None
     )
 
 
+_PR_FIX_TEMPLATE = """{% if soul %}---
+# Persona
+{{ soul }}
+---
+
+{% endif %}You are continuing work on an EXISTING branch `{{ branch }}` that already has an open pull request (#{{ pr_number }}) for issue #{{ issue_number }}. {{ header }}.
+
+Address the feedback below by editing the code on this branch. Keep the change minimal and focused only on what the feedback calls for.
+
+## Feedback
+{{ feedback }}
+
+## Rules
+- Work only on this branch. Do NOT open a new pull request and do NOT change the PR description.
+- After your edits, the verify command must pass: `{{ verify_cmd }}`.
+- Do not revert unrelated parts of the existing branch.
+"""
+
+
 def render_pr_fix_prompt(
     task: Task,
     *,
@@ -83,33 +102,7 @@ def render_pr_fix_prompt(
         if kind == "ci"
         else "a reviewer has requested changes"
     )
-    template = _template_env().from_string(
-        "\n".join(
-            [
-                "{% if soul %}---",
-                "# Persona",
-                "{{ soul }}",
-                "---",
-                "",
-                "{% endif %}You are continuing work on an EXISTING branch `{{ branch }}` that"
-                " already has an open pull request (#{{ pr_number }}) for issue"
-                " #{{ issue_number }}. {{ header }}.",
-                "",
-                "Address the feedback below by editing the code on this branch. Keep the"
-                " change minimal and focused only on what the feedback calls for.",
-                "",
-                "## Feedback",
-                "{{ feedback }}",
-                "",
-                "## Rules",
-                "- Work only on this branch. Do NOT open a new pull request and do NOT"
-                " change the PR description.",
-                "- After your edits, the verify command must pass: `{{ verify_cmd }}`.",
-                "- Do not revert unrelated parts of the existing branch.",
-                "",
-            ]
-        )
-    )
+    template = _template_env().from_string(_PR_FIX_TEMPLATE)
     return template.render(
         soul=soul,
         branch=task.branch,

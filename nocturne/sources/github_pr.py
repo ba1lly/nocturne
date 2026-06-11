@@ -18,7 +18,6 @@ CIState = Literal["PASSING", "FAILING", "PENDING", "NONE"]
 ReviewState = Literal["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", "NONE"]
 
 _FAILING_CONCLUSIONS = {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
-_PENDING_STATUSES = {"queued", "in_progress", "pending", "waiting", "requested"}
 _MAX_FEEDBACK_CHARS = 12000
 
 
