@@ -109,9 +109,10 @@ class TestVersion:
 
     def test_version(self) -> None:
         """Test --version prints version."""
+        from nocturne import __version__
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
-        assert "nocturne 0.1.0" in result.stdout
+        assert f"nocturne {__version__}" in result.stdout
 
 
 class TestRunOnceHelp:
