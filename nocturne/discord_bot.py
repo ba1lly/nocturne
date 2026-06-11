@@ -36,6 +36,16 @@ class NocturneBot:
     resilience) and invokes the resume_callback.
     """
 
+    # Slash-command handler closures captured by _register_commands; kept as
+    # attributes so tests can invoke them directly. Signatures vary by command.
+    _cmd_status: Callable[..., Awaitable[None]]
+    _cmd_answer: Callable[..., Awaitable[None]]
+    _cmd_queue: Callable[..., Awaitable[None]]
+    _cmd_skip: Callable[..., Awaitable[None]]
+    _cmd_pause: Callable[..., Awaitable[None]]
+    _cmd_resume: Callable[..., Awaitable[None]]
+    _cmd_run: Callable[..., Awaitable[None]]
+
     def __init__(
         self,
         cfg: Config,
