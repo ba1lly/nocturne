@@ -122,16 +122,41 @@ def make_worktree(
     return worktree_path
 
 
+# Patterns nocturne adds to each worktree's local .git/info/exclude so that
+# commit_push's `git add -A` never sweeps them into a real commit.
+#
+#   - nocturne-internal artifacts it writes itself (PR body, review output)
+#   - universally-non-committable build/cache junk that verify_cmd (pytest,
+#     npm, etc.) generates. A target repo with a complete .gitignore already
+#     ignores these; this is defense-in-depth for repos that don't, so a stray
+#     __pycache__/*.pyc never lands in a generated PR.
+#
+# .git/info/exclude is a local-only ignore (never committed) and is shared
+# across a repo's worktrees, so this is the right scope: nocturne keeps its
+# commits clean without imposing a .gitignore on the user's repo.
+_NOCTURNE_EXCLUDE_PATTERNS: list[str] = [
+    # nocturne-internal
+    ".nocturne-pr-body.md",  # opencode writes the PR title+body here (task.md.jinja2)
+    ".reviews/",             # /review-pr persists multi-agent review output here
+    # build / test / tooling caches (never legitimately committed)
+    "__pycache__/",
+    "*.py[cod]",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".coverage",
+    "node_modules/",
+]
+
+
 def _add_nocturne_local_excludes(worktree_path: Path) -> None:
-    """Add nocturne-internal artifacts to .git/info/exclude so they never
-    end up in commits, even when commit_push does `git add -A`.
+    """Ensure every pattern in ``_NOCTURNE_EXCLUDE_PATTERNS`` is present in the
+    worktree's local .git/info/exclude.
 
-    Excluded:
-      - .nocturne-pr-body.md   (opencode writes the PR title+body here per task.md.jinja2)
-      - .reviews/              (/review-pr persists multi-agent review output here)
-
-    .git/info/exclude is a local-only ignore (not committed), exactly the
-    right scope for nocturne-internal artifacts.
+    Appends only the patterns that are missing (per-line), so it is idempotent
+    across repeated worktrees AND correctly upgrades exclude files written by
+    an older nocturne version that listed fewer patterns. User-added rules are
+    preserved untouched.
     """
     git_dir_result = subprocess.run(
         ["git", "-C", str(worktree_path), "rev-parse", "--git-path", "info/exclude"],
@@ -148,17 +173,15 @@ def _add_nocturne_local_excludes(worktree_path: Path) -> None:
         exclude_path = (worktree_path / exclude_rel).resolve()
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
 
-    nocturne_lines = [
-        "# nocturne-internal artifacts (auto-added by nocturne/gitwork)",
-        ".nocturne-pr-body.md",
-        ".reviews/",
-    ]
     existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
-    if ".nocturne-pr-body.md" in existing and ".reviews/" in existing:
+    existing_lines = {line.strip() for line in existing.splitlines()}
+    missing = [p for p in _NOCTURNE_EXCLUDE_PATTERNS if p not in existing_lines]
+    if not missing:
         return
 
+    additions = ["# nocturne-internal + build artifacts (auto-added by nocturne/gitwork)", *missing]
     sep = "" if existing.endswith("\n") or not existing else "\n"
-    exclude_path.write_text(existing + sep + "\n".join(nocturne_lines) + "\n", encoding="utf-8")
+    exclude_path.write_text(existing + sep + "\n".join(additions) + "\n", encoding="utf-8")
 
 
 def commit_push(wt: Path, message: str, base: str) -> None:

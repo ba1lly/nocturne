@@ -66,10 +66,8 @@ disable_error_code = [
   "no-untyped-def",
   "no-untyped-call",
   "var-annotated",
-  "attr-defined",
   "arg-type",
   "assignment",
-  "return-value",
   "misc",
 ]
 warn_unused_ignores = false

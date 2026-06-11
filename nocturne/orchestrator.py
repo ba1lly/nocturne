@@ -129,6 +129,10 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     on_pid_started=pid_callback,
                 )
 
+                if result.token_usage:
+                    store.add_task_tokens(task.id, result.token_usage)
+                    task.token_usage += result.token_usage
+
                 if result.sentinel_seen:
                     log.warning(
                         "sentinel detected on task=%s question=%r",
@@ -329,6 +333,7 @@ def run_batch(
     skipped: list[tuple[int, str]] = []
     aborted: list[Task] = []
     errors: list[str] = []
+    batch_tokens = 0
 
     try:
         issues = fetch_eligible(repo_cfg)
@@ -375,6 +380,7 @@ def run_batch(
             errors.append(f"{task.id}: {type(e).__name__}: {e}")
             continue
 
+        batch_tokens += result_task.token_usage
         if result_task.status == "done":
             done.append(result_task)
         elif result_task.status == "aborted":
@@ -403,6 +409,13 @@ def run_batch(
                 errors.append(f"{task.id}: {type(e).__name__}: {e}")
                 continue
 
+            # DOABLE tasks (done/failed/aborted) consumed tokens via process_task;
+            # read the persisted total back so failed attempts still count.
+            if status in ("done", "failed", "aborted"):
+                processed = store.get_task(task.id)
+                if processed is not None:
+                    batch_tokens += processed.token_usage
+
             if status == "done":
                 done.append(store.get_task(task.id) or task)
             elif status == "aborted":
@@ -430,5 +443,5 @@ def run_batch(
         aborted=aborted,
         errors=errors,
         summary="",
-        token_usage=0,
+        token_usage=batch_tokens,
     )

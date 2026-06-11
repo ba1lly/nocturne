@@ -96,9 +96,19 @@ cat > "$SANDBOX_CHECKOUT_PATH/README.md" <<'EOF'
 Sandbox repo for Nocturne.
 EOF
 
+cat > "$SANDBOX_CHECKOUT_PATH/.gitignore" <<'EOF'
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
+EOF
+
 pushd "$SANDBOX_CHECKOUT_PATH" >/dev/null
 if [[ -n "$(git status --porcelain)" ]]; then
-  git add pyproject.toml src/playground/__init__.py src/playground/math.py tests/test_math.py README.md
+  git add pyproject.toml src/playground/__init__.py src/playground/math.py tests/test_math.py README.md .gitignore
   if ! git diff --cached --quiet; then
     git -c user.name="$GITHUB_OWNER" -c user.email="${GITHUB_OWNER}@users.noreply.github.com" commit -m "feat: seed playground with buggy math module"
   fi

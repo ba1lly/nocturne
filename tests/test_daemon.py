@@ -129,8 +129,10 @@ def _patch_pipeline(
         process_calls.append(task)
         if process_result is not None:
             return process_result(task) if callable(process_result) else process_result
-        # Default: mark done.
+        # Default: mark done with a measured token cost (mirrors the per-task
+        # accounting the real process_task performs from the opencode stream).
         task.status = "done"
+        task.token_usage = 5000
         return task
 
     # Patch BOTH the source module and the daemon's local imports (daemon
@@ -197,6 +199,25 @@ def test_is_quiet_hour_respects_config(fake_cfg, inmem_store):
     assert d._is_quiet_hour() is True
     # Set to a different hour.
     fake_cfg.daemon.quiet_hours = [(current_hour + 12) % 24]
+    assert d._is_quiet_hour() is False
+
+
+def test_is_quiet_hour_uses_configured_timezone(fake_cfg, inmem_store):
+    from zoneinfo import ZoneInfo
+
+    from nocturne.daemon import Daemon
+    tz_name = "America/New_York"
+    local_hour = datetime.now(ZoneInfo(tz_name)).hour
+    utc_hour = datetime.now(timezone.utc).hour
+    if local_hour == utc_hour:
+        pytest.skip("local tz offset is zero right now; cannot distinguish from UTC")
+
+    d = Daemon(fake_cfg, inmem_store)
+    fake_cfg.daemon.quiet_hours = [local_hour]
+    fake_cfg.daemon.quiet_hours_tz = tz_name
+    assert d._is_quiet_hour() is True
+    # The same hour list interpreted as UTC would NOT match right now.
+    fake_cfg.daemon.quiet_hours_tz = None
     assert d._is_quiet_hour() is False
 
 
@@ -271,6 +292,7 @@ async def test_run_one_cycle_processes_doable(fake_cfg, inmem_store, monkeypatch
 
 @pytest.mark.asyncio
 async def test_run_one_cycle_skips_non_doable(fake_cfg, inmem_store, monkeypatch):
+    import nocturne.askflow as askflow
     from nocturne.daemon import Daemon
     t_skip = _make_task(1)
     t_need = _make_task(2)
@@ -281,12 +303,23 @@ async def test_run_one_cycle_skips_non_doable(fake_cfg, inmem_store, monkeypatch
     counts, _ = _patch_pipeline(
         monkeypatch, issues=[t_skip, t_need], triaged=triaged
     )
+    # NEED_INPUT now parks + asks; stub the GitHub comment so the test stays hermetic.
+    posted: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        askflow, "post_park_comment",
+        lambda repo, num, q: posted.append((repo, num, q)),
+    )
     d = Daemon(fake_cfg, inmem_store)
     summary = await d.run_one_cycle()
     assert summary["skip"] == 1
     assert summary["need_input"] == 1
     assert summary["doable"] == 0
     assert counts["process"] == 0
+    # Bug fix: the NEED_INPUT issue is actually parked and the question posted,
+    # rather than being silently re-triaged every cycle.
+    parked = inmem_store.get_task(t_need.id)
+    assert parked is not None and parked.status == "parked"
+    assert posted == [(t_need.repo_slug, t_need.issue_number, "r")]
 
 
 @pytest.mark.asyncio
@@ -371,6 +404,31 @@ async def test_run_one_cycle_failed_task_counted(
     summary = await d.run_one_cycle()
     assert summary["processed_done"] == 0
     assert summary["processed_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_accumulates_measured_tokens(
+    fake_cfg, inmem_store, monkeypatch
+):
+    """Daemon token total reflects process_task's measured usage, not a constant."""
+    from nocturne.daemon import Daemon
+    task = _make_task(1)
+    tr = _tr(task.id, "DOABLE")
+
+    def _with_tokens(t):
+        t.status = "done"
+        t.token_usage = 12_345
+        return t
+
+    _patch_pipeline(
+        monkeypatch,
+        issues=[task],
+        triaged=[(task, tr)],
+        process_result=_with_tokens,
+    )
+    d = Daemon(fake_cfg, inmem_store)
+    await d.run_one_cycle()
+    assert d.tokens_used == 12_345
 
 
 # -- poll loop / shutdown tests --

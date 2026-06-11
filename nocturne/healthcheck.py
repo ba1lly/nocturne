@@ -14,6 +14,8 @@ from nocturne.config import Config
 from nocturne.store import Store
 
 if TYPE_CHECKING:
+    from aiohttp import web
+
     from nocturne.daemon import Daemon
 
 logger = get_logger("nocturne.healthcheck")
@@ -26,8 +28,8 @@ class Healthcheck:
     store: Store
     daemon: Optional["Daemon"]
     _started_at: float
-    _runner: Optional[object]
-    _site: Optional[object]
+    _runner: Optional["web.AppRunner"]
+    _site: Optional["web.BaseSite"]
 
     def __init__(
         self,

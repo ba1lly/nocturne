@@ -152,6 +152,52 @@ def test_update_pr_url_persists_and_clears(tmp_path: Path) -> None:
         store.close()
 
 
+def test_add_task_tokens_accumulates_and_round_trips(tmp_path: Path) -> None:
+    store = Store(tmp_path / "n.db")
+    try:
+        task = _task("r#tok1")
+        store.insert_task(task)
+        assert store.get_task(task.id).token_usage == 0
+
+        store.add_task_tokens(task.id, 1500)
+        store.add_task_tokens(task.id, 2500)
+        assert store.get_task(task.id).token_usage == 4000
+
+        # Non-positive deltas are no-ops.
+        store.add_task_tokens(task.id, 0)
+        store.add_task_tokens(task.id, -10)
+        assert store.get_task(task.id).token_usage == 4000
+    finally:
+        store.close()
+
+
+def test_token_usage_column_migrated_onto_legacy_db(tmp_path: Path) -> None:
+    """A DB whose tasks table predates token_usage is migrated in-place."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE tasks ("
+        "id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, repo_slug TEXT NOT NULL, checkout_path TEXT NOT NULL, "
+        "issue_number INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, "
+        "base TEXT NOT NULL, verify_cmd TEXT NOT NULL, require_new_test INTEGER NOT NULL, "
+        "coding_model TEXT NOT NULL, branch TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
+        "pr_url TEXT, question TEXT, answer TEXT, opencode_pid INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db_path)
+    try:
+        cols = {row[1] for row in store.conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        assert "token_usage" in cols
+        task = _task("r#legacy")
+        store.insert_task(task)
+        assert store.get_task(task.id).token_usage == 0
+    finally:
+        store.close()
+
+
 def test_increment_attempts_is_atomic_and_monotonic(tmp_path: Path) -> None:
     store = Store(tmp_path / "n.db")
     try:
