@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   pr_url TEXT,
   question TEXT,
   answer TEXT,
-  opencode_pid INTEGER
+  opencode_pid INTEGER,
+  token_usage INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (

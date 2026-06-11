@@ -30,6 +30,7 @@ from nocturne.opencode_driver import (
     SENTINEL,
     _build_opencode_args,
     detect_sentinel,
+    extract_token_usage,
     has_error_events,
     parse_ndjson_line,
     parse_ndjson_stream,
@@ -295,3 +296,107 @@ def test_run_tolerates_parse_errors(monkeypatch: pytest.MonkeyPatch, task: Task,
 
     assert result.events == [{"type": "text", "text": "ok"}, {"type": "text", "text": "done"}]
     assert result.sentinel_seen is False
+
+
+# -- token usage extraction --
+
+
+def test_extract_token_usage_empty_stream_is_zero() -> None:
+    assert extract_token_usage([]) == 0
+    assert extract_token_usage([{"type": "text", "text": "hi"}]) == 0
+
+
+def test_extract_token_usage_opencode_native_shape() -> None:
+    events = [
+        {"type": "step-finish", "tokens": {"input": 100, "output": 50, "reasoning": 10,
+                                            "cache": {"read": 5, "write": 2}}},
+    ]
+    assert extract_token_usage(events) == 167
+
+
+def test_extract_token_usage_openai_total_not_double_counted() -> None:
+    # When an explicit total is present we trust it and ignore the components.
+    events = [{"usage": {"prompt_tokens": 80, "completion_tokens": 20, "total_tokens": 100}}]
+    assert extract_token_usage(events) == 100
+
+
+def test_extract_token_usage_openai_components_summed_without_total() -> None:
+    events = [{"usage": {"prompt_tokens": 80, "completion_tokens": 20}}]
+    assert extract_token_usage(events) == 100
+
+
+def test_extract_token_usage_sums_across_steps() -> None:
+    events = [
+        {"tokens": {"input": 10, "output": 5}},
+        {"type": "text", "text": "noise"},
+        {"tokens": {"input": 20, "output": 5}},
+    ]
+    assert extract_token_usage(events) == 40
+
+
+def test_extract_token_usage_reads_nested_message_container() -> None:
+    events = [{"type": "message", "message": {"tokens": {"input": 30, "output": 10}}}]
+    assert extract_token_usage(events) == 40
+
+
+def test_extract_token_usage_single_mapping_per_event_no_double_count() -> None:
+    # Same usage mirrored at top level and under part → counted once.
+    payload = {"input": 10, "output": 10}
+    events = [{"tokens": payload, "part": {"tokens": payload}}]
+    assert extract_token_usage(events) == 20
+
+
+def test_run_populates_token_usage(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:
+    stdout = (
+        json.dumps({"type": "text", "text": "done"}) + "\n"
+        + json.dumps({"type": "step-finish", "tokens": {"input": 200, "output": 40}}) + "\n"
+    )
+    proc = FakeProc(stdout=stdout, returncode=0)
+    patch_popen(monkeypatch, proc)
+
+    result = run(task, tmp_path, cfg)
+
+    assert result.token_usage == 240
+
+
+def test_run_timeout_token_usage_is_zero(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path) -> None:
+    proc = TimeoutProc(pid=7)
+    patch_popen(monkeypatch, proc)
+
+    result = run(task, tmp_path, cfg)
+
+    assert result.token_usage == 0
+
+
+# Verbatim stdout captured from a real `opencode run --format json` session
+# (opencode 1.15.13). Anchors the parser to the actual event shape: tokens live
+# under part.tokens in a step_finish event as {total,input,output,reasoning,
+# cache:{write,read}}, and the plugin's OSC ]777;notify escape sequences must be
+# tolerated as parse-errors without losing the token-bearing event.
+_REAL_OPENCODE_STDOUT = (
+    '\x1b]777;notify;warp://cli-agent;{"v":1,"event":"session_start"}'
+    '{"type":"step_start","sessionID":"ses_1","part":{"id":"prt_1","type":"step-start"}}\n'
+    '{"type":"text","sessionID":"ses_1","part":{"id":"prt_2","type":"text","text":"hi"}}\n'
+    '{"type":"step_finish","sessionID":"ses_1","part":{"id":"prt_3","type":"step-finish",'
+    '"tokens":{"total":37908,"input":6,"output":6,"reasoning":0,'
+    '"cache":{"write":37896,"read":0}},"cost":0.23703}}\n'
+    '\x1b]777;notify;warp://cli-agent;{"v":1,"event":"stop","response":"hi"}'
+)
+
+
+def test_extract_token_usage_matches_real_opencode_session() -> None:
+    events, _errs = parse_ndjson_stream(_REAL_OPENCODE_STDOUT)
+    # The text + step_finish lines parse; the notify-polluted lines are skipped.
+    assert [e.get("type") for e in events] == ["text", "step_finish"]
+    assert extract_token_usage(events) == 37908
+
+
+def test_run_extracts_tokens_from_real_opencode_stream(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, tmp_path: Path
+) -> None:
+    proc = FakeProc(stdout=_REAL_OPENCODE_STDOUT, returncode=0)
+    patch_popen(monkeypatch, proc)
+
+    result = run(task, tmp_path, cfg)
+
+    assert result.token_usage == 37908

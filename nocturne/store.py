@@ -30,6 +30,8 @@ class Store:
             _ = self._conn.execute("PRAGMA journal_mode = WAL")
         _ = self._conn.execute("PRAGMA foreign_keys = ON")
         _ = self._conn.executescript(_SCHEMA_SQL)
+        # Migration for DBs created before token accounting landed.
+        self.add_column_if_not_exists("tasks", "token_usage", "INTEGER NOT NULL DEFAULT 0")
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -42,11 +44,13 @@ class Store:
                 "INSERT INTO tasks ("
                 + "id, status, created_at, updated_at, repo_slug, checkout_path, "
                 + "issue_number, title, body, base, verify_cmd, require_new_test, "
-                + "coding_model, branch, attempts, pr_url, question, answer, opencode_pid"
+                + "coding_model, branch, attempts, pr_url, question, answer, opencode_pid, "
+                + "token_usage"
                 + ") VALUES ("
                 + ":id, :status, :created_at, :updated_at, :repo_slug, :checkout_path, "
                 + ":issue_number, :title, :body, :base, :verify_cmd, :require_new_test, "
-                + ":coding_model, :branch, :attempts, :pr_url, :question, :answer, :opencode_pid"
+                + ":coding_model, :branch, :attempts, :pr_url, :question, :answer, :opencode_pid, "
+                + ":token_usage"
                 + ")",
                 row,
             )
@@ -71,6 +75,16 @@ class Store:
             _ = self._conn.execute(
                 "UPDATE tasks SET opencode_pid = ?, updated_at = ? WHERE id = ?",
                 (pid, _now(), task_id),
+            )
+
+    def add_task_tokens(self, task_id: str, tokens: int) -> None:
+        """Accumulate measured token usage onto a task row (idempotent per call)."""
+        if tokens <= 0:
+            return
+        with self._conn:
+            _ = self._conn.execute(
+                "UPDATE tasks SET token_usage = token_usage + ?, updated_at = ? WHERE id = ?",
+                (tokens, _now(), task_id),
             )
 
     def update_pr_url(self, task_id: str, pr_url: str | None) -> None:

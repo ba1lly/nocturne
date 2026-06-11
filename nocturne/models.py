@@ -52,6 +52,7 @@ class Task(BaseTaskModel):
     question: str | None = None
     answer: str | None = None
     opencode_pid: int | None = None
+    token_usage: int = 0
 
     @field_validator("repo_slug")
     @classmethod
@@ -77,6 +78,7 @@ class ParkedTask(BaseTaskModel):
     question: str = Field(min_length=1)
     answer: str | None = None
     opencode_pid: int | None = None
+    token_usage: int = 0
     parked_at: datetime
 
     @field_validator("repo_slug")
@@ -117,6 +119,7 @@ class OpenCodeResult(BaseModel):
     need_input_question: str | None = None
     pid: int | None = None
     error_events: list[dict[str, Any]]
+    token_usage: int = 0
 
 
 class RunReport(BaseModel):

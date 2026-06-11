@@ -239,7 +239,7 @@ def run_once(
         skipped=[],
         errors=[],
         summary="",
-        token_usage=0,
+        token_usage=result_task.token_usage,
     )
 
     report.summary = summarize(report, cfg)

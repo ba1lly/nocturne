@@ -82,6 +82,82 @@ def has_error_events(events: list[dict[str, object]]) -> list[dict[str, object]]
     return [event for event in events if event.get("type") == "error"]
 
 
+def _coerce_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _sum_token_mapping(tokens: dict[str, object]) -> int:
+    """Sum a single usage/token mapping to a total token count.
+
+    Handles the two shapes seen in practice:
+      - opencode native:  {input, output, reasoning, cache: {read, write}}
+      - OpenAI-style:     {prompt_tokens, completion_tokens, total_tokens}
+    When an explicit total is present we trust it (and do NOT also add the
+    components, which would double-count). Otherwise we sum the components.
+    """
+    for total_key in ("total_tokens", "total"):
+        if total_key in tokens:
+            return _coerce_int(tokens[total_key])
+    total = 0
+    for key in (
+        "input",
+        "output",
+        "reasoning",
+        "input_tokens",
+        "output_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+    ):
+        total += _coerce_int(tokens.get(key))
+    cache = tokens.get("cache")
+    if isinstance(cache, dict):
+        total += _coerce_int(cache.get("read"))
+        total += _coerce_int(cache.get("write"))
+    return total
+
+
+def _event_token_usage(event: dict[str, object]) -> int:
+    """Extract token usage from one event, counting at most one mapping.
+
+    opencode attaches usage either at the top level or nested under the
+    message/part container depending on event type. We count the first
+    non-zero mapping found so a single event is never double-counted.
+    """
+    candidates: list[dict[str, object]] = []
+    for key in ("tokens", "usage"):
+        value = event.get(key)
+        if isinstance(value, dict):
+            candidates.append(cast(dict[str, object], value))
+    for container_key in ("part", "message", "info", "metadata"):
+        container = event.get(container_key)
+        if isinstance(container, dict):
+            for key in ("tokens", "usage"):
+                value = cast(dict[str, object], container).get(key)
+                if isinstance(value, dict):
+                    candidates.append(cast(dict[str, object], value))
+    for candidate in candidates:
+        total = _sum_token_mapping(candidate)
+        if total:
+            return total
+    return 0
+
+
+def extract_token_usage(events: list[dict[str, object]]) -> int:
+    """Total tokens consumed across an opencode session's event stream.
+
+    Returns 0 when the stream carries no usage data (older opencode builds,
+    timeouts, or non-LLM runs) so callers can treat it as a best-effort
+    measurement rather than a guarantee.
+    """
+    return sum(_event_token_usage(event) for event in events)
+
+
 def _build_opencode_args(task: Task, cwd: Path, prompt_content: str, cfg: Config) -> list[str]:
     args: list[str] = [
         cfg.opencode.command,
@@ -142,6 +218,7 @@ def run(
             need_input_question=None,
             pid=proc.pid,
             error_events=[{"type": "timeout"}],
+            token_usage=0,
         )
 
     events, _parse_errors = parse_ndjson_stream(stdout)
@@ -154,4 +231,5 @@ def run(
         need_input_question=question,
         pid=proc.pid,
         error_events=error_events,
+        token_usage=extract_token_usage(events),
     )
