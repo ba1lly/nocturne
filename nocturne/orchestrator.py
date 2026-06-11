@@ -14,12 +14,13 @@ from nocturne.guardrails import (
     check_repo_allowed,
     check_wallclock,
 )
-from nocturne.models import OpenCodeResult, ParkedTask, RunReport, Task, TriageResult
+from nocturne.models import OpenCodeResult, ParkedTask, PRWatch, RunReport, Task, TriageResult
 from nocturne.sources.github_issues import (
     fetch_eligible,
     find_blocking_open_pr,
     get_issue_snapshot,
 )
+from nocturne.sources.github_pr import parse_pr_number
 from nocturne.store import Store
 from nocturne.triage import triage_batch
 
@@ -129,6 +130,89 @@ def _check_issue_drift(task: Task, repo_cfg: RepoConfig) -> str | None:
     return None
 
 
+def _provider_key_envs(cfg: Config) -> set[str]:
+    """Provider API key env-var names to strip from the verify subprocess
+    (it runs agent-authored test code and needs no model access)."""
+    names = {p.api_key_env for p in cfg.providers.values()}
+    names.add("OPENCODE_PROVIDER_API_KEY")
+    return names
+
+
+def _register_pr_watch(task: Task, pr_url: str, store: Store) -> None:
+    now = datetime.now(timezone.utc)
+    store.add_pr_watch(
+        PRWatch(
+            pr_url=pr_url,
+            task_id=task.id,
+            repo_slug=task.repo_slug,
+            pr_number=parse_pr_number(pr_url),
+            branch=task.branch,
+            base=task.base,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def process_pr_reaction(
+    watch: PRWatch, kind: str, feedback: str, cfg: Config, store: Store
+) -> tuple[bool, int]:
+    """Re-dispatch the agent onto an open PR's branch to fix CI or address
+    review comments. Returns (pushed_a_fix, tokens_used). Opens NO new PR;
+    pushes a fast-forward commit onto the existing branch.
+    """
+    from nocturne.prompts.render import render_pr_fix_prompt
+
+    log = get_logger("nocturne.orchestrator")
+    task = store.get_task(watch.task_id)
+    if task is None:
+        log.warning("pr-reaction: task %s missing for PR %s", watch.task_id, watch.pr_url)
+        return (False, 0)
+
+    # Fixes need not add a new test (we're addressing feedback, not adding scope).
+    task = task.model_copy(update={"branch": watch.branch, "require_new_test": False})
+
+    safe_slug = task.repo_slug.replace("/", "__")
+    wt_path = Path(cfg.opencode.worktree_root) / f"{safe_slug}-pr-{watch.pr_number}-fix-{watch.fix_attempts}"
+    wt = gitwork.make_worktree_from_branch(Path(task.checkout_path), watch.branch, wt_path)
+
+    tokens = 0
+    pushed = False
+    try:
+        with WorktreeContext(wt, expected_base=task.base):
+            prompt = render_pr_fix_prompt(
+                task, pr_number=watch.pr_number, kind=kind, feedback=feedback, cfg=cfg
+            )
+            result = opencode_driver.run(
+                task, wt, cfg,
+                on_pid_started=lambda pid: store.update_pid(task.id, pid),
+                prompt_override=prompt,
+            )
+            tokens = result.token_usage
+            if tokens:
+                store.add_task_tokens(task.id, tokens)
+            if result.sentinel_seen or result.exit_code != 0 or result.error_events:
+                log.warning("pr-reaction: opencode did not produce a clean fix for %s", watch.pr_url)
+                return (False, tokens)
+
+            v = verifier.verify(task, wt, strip_env=_provider_key_envs(cfg))
+            if not v.passed:
+                log.warning("pr-reaction: verify failed for %s (%s)", watch.pr_url, v.reason)
+                return (False, tokens)
+
+            try:
+                gitwork.commit_push_followup(wt, f"Address {kind} feedback on #{watch.pr_number}")
+            except (GuardrailViolation, gitwork.GitworkError) as e:
+                log.warning("pr-reaction: could not push fix for %s: %s", watch.pr_url, e)
+                return (False, tokens)
+            pushed = True
+            log.info("pr-reaction: pushed %s fix for %s", kind, watch.pr_url)
+            return (True, tokens)
+    finally:
+        if pushed:
+            gitwork.cleanup(wt, Path(task.checkout_path))
+
+
 def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Task:
     log = get_logger("nocturne.orchestrator")
 
@@ -159,8 +243,7 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
 
     # Provider API keys to strip from the verify subprocess: it runs
     # agent-authored test code and needs no model access.
-    verify_strip_env = {p.api_key_env for p in cfg.providers.values()}
-    verify_strip_env.add("OPENCODE_PROVIDER_API_KEY")
+    verify_strip_env = _provider_key_envs(cfg)
 
     try:
         with WorktreeContext(wt, expected_base=task.base):
@@ -269,6 +352,14 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                 task.status = "done"
                 success = True
                 log.info("task=%s done pr_url=%s", task.id, pr_url)
+
+                # Register the PR for the post-PR feedback loop (CI fixes,
+                # review-comment handling). Best-effort: never fail the task.
+                if not dry_run and cfg.reactions.enabled:
+                    try:
+                        _register_pr_watch(task, pr_url, store)
+                    except Exception as e:
+                        log.warning("could not register PR watch for %s: %s", task.id, e)
 
                 if not dry_run:
                     try:

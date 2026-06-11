@@ -126,6 +126,28 @@ class DaemonConfig(StrictBaseModel):
         return value
 
 
+class ReactionsConfig(StrictBaseModel):
+    """Post-PR feedback loop: after Nocturne opens a PR it can keep shepherding
+    it toward merge-ready by reacting to CI failures and review comments.
+
+    It NEVER merges - ``approved-and-green`` only notifies a human, who makes
+    the merge call. Auto-merge is intentionally absent and blocked by
+    ``guardrails.enforce_no_auto_merge``.
+    """
+
+    enabled: bool = False
+    # React to failing CI by re-dispatching the agent to fix the branch.
+    fix_failing_ci: bool = True
+    # React to a reviewer's "changes requested" by addressing the comments.
+    address_review_comments: bool = True
+    # Notify when a watched PR is approved and green (never merges it).
+    notify_when_ready: bool = True
+    # Hard cap on autonomous fix attempts per PR before escalating to a human.
+    max_fix_attempts: int = 3
+    # Stop watching a PR after this many hours regardless of state.
+    watch_ttl_hours: int = 168
+
+
 class ReviewConfig(StrictBaseModel):
     enabled: bool = True
     budget_attempts: int = 2
@@ -178,6 +200,7 @@ class Config(StrictBaseModel):
     review: ReviewConfig
     healthcheck: HealthcheckConfig
     persona: PersonaConfig
+    reactions: ReactionsConfig = Field(default_factory=ReactionsConfig)
 
 
 def provider_of(model_string: str) -> str:

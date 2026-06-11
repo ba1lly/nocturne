@@ -89,6 +89,33 @@ class ParkedTask(BaseTaskModel):
         return value
 
 
+PRWatchState = Literal["watching", "ready", "escalated", "merged", "closed"]
+
+
+class PRWatch(BaseModel):
+    """A PR Nocturne opened and is shepherding toward merge-ready.
+
+    ``state`` is ``watching`` while the feedback loop is active; the terminal
+    states record why we stopped (human-ready, escalated to a human, merged, or
+    closed). ``last_signature`` dedupes reactions so we act once per distinct PR
+    state (keyed on head sha) instead of looping on the same failing CI.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pr_url: str
+    task_id: str
+    repo_slug: str
+    pr_number: int
+    branch: str
+    base: str
+    state: PRWatchState = "watching"
+    fix_attempts: int = 0
+    last_signature: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class TriageResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

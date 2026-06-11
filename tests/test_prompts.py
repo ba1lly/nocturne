@@ -22,7 +22,12 @@ from nocturne.config import (
     SandboxConfig,
 )
 from nocturne.models import Task
-from nocturne.prompts.render import load_soul, render_review_prompt, render_task_prompt
+from nocturne.prompts.render import (
+    load_soul,
+    render_pr_fix_prompt,
+    render_review_prompt,
+    render_task_prompt,
+)
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
@@ -229,3 +234,24 @@ def test_render_review_prompt_injects_soul(tmp_path: Path) -> None:
     assert "# Persona" in out
     assert "Review carefully." in out
     assert "You are running the reviewer skill." in out
+
+
+def test_render_pr_fix_prompt_ci(tmp_path: Path) -> None:
+    task = make_task(branch="nocturne/issue-7-1")
+    out = render_pr_fix_prompt(
+        task, pr_number=12, kind="ci", feedback="3 tests failed", cfg=make_config(enabled=False)
+    )
+    assert "nocturne/issue-7-1" in out
+    assert "#12" in out
+    assert "continuous-integration checks are failing" in out
+    assert "3 tests failed" in out
+    assert "Do NOT open a new pull request" in out
+
+
+def test_render_pr_fix_prompt_review(tmp_path: Path) -> None:
+    task = make_task(branch="nocturne/issue-7-1")
+    out = render_pr_fix_prompt(
+        task, pr_number=12, kind="review", feedback="add error handling", cfg=make_config(enabled=False)
+    )
+    assert "a reviewer has requested changes" in out
+    assert "add error handling" in out

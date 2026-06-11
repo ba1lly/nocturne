@@ -24,6 +24,12 @@ You label an issue `agent` on a configured repo. Nocturne:
 6. **NEED_INPUT issues get parked** with a question comment on the issue; resume them later with `nocturne resume --task-id ... --answer ...`
 7. **SKIP issues get a marker comment** explaining why they were skipped (idempotent - never duplicates)
 
+Optionally, once a PR is open Nocturne can **keep shepherding it** (set `reactions.enabled: true`):
+
+- **Failing CI** -> re-dispatches the agent on the same branch to fix and pushes a follow-up commit
+- **Reviewer requested changes** -> addresses the comments on the same branch
+- **Approved and green** -> notifies you it's ready (you merge; it never does)
+
 Nocturne never merges, never force-pushes, never touches `main`.
 
 ## Quick start

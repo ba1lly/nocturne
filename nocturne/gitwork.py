@@ -284,6 +284,82 @@ def commit_push(wt: Path, message: str, base: str) -> None:
     )
 
 
+def make_worktree_from_branch(repo_path: Path, branch: str, worktree_path: Path) -> Path:
+    """Materialise a worktree on an EXISTING remote branch (for re-dispatching a
+    fix onto an open PR), rather than branching fresh off base like
+    ``make_worktree``.
+    """
+    prune_worktrees(repo_path)
+
+    if worktree_path.exists():
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_path), "worktree", "remove", "--force", str(worktree_path)],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    fetch = subprocess.run(
+        ["git", "-C", str(repo_path), "fetch", "origin", branch],
+        check=False, capture_output=True, text=True, timeout=_GIT_NETWORK_TIMEOUT_S,
+    )
+    if fetch.returncode != 0:
+        raise GitworkError(f"git fetch origin {branch} failed: {fetch.stderr.strip()}")
+
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "worktree", "add", "-B", branch,
+         str(worktree_path), f"origin/{branch}"],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise GitworkError(
+            f"git worktree add from origin/{branch} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+
+    _install_pre_push_hook(worktree_path)
+    _add_nocturne_local_excludes(worktree_path)
+    return worktree_path
+
+
+def commit_push_followup(wt: Path, message: str) -> None:
+    """Commit current changes ON TOP of the existing branch and fast-forward
+    push to its PR (no reset-to-base, no force). Used by the feedback loop to
+    add a fix commit to an open PR.
+    """
+    subprocess.run(
+        ["git", "-C", str(wt), "add", "-A"],
+        check=True, capture_output=True, text=True,
+    )
+
+    diff_check = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--quiet"],
+        check=False, capture_output=True, text=True,
+    )
+    if diff_check.returncode == 0:
+        raise GitworkError("commit_push_followup: no changes to commit")
+
+    staged = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--name-only"],
+        check=True, capture_output=True, text=True,
+    )
+    assert_no_sensitive_paths([line for line in staged.stdout.splitlines() if line.strip()])
+
+    subprocess.run(
+        ["git", "-C", str(wt), "-c", "user.name=Nocturne",
+         "-c", "user.email=nocturne@noreply.localhost", "commit", "-m", message],
+        check=True, capture_output=True, text=True, env={**os.environ, **_NOCTURNE_ENV},
+    )
+
+    push_args = ["git", "-C", str(wt), "push", "origin", "HEAD"]
+    enforce_no_force_push(push_args)
+    subprocess.run(
+        push_args, check=True, capture_output=True, text=True, timeout=_GIT_NETWORK_TIMEOUT_S,
+    )
+
+
 def open_pr(repo: str, branch: str, base: str, title: str, body: str) -> str:
     args = [
         "gh",

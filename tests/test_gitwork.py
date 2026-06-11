@@ -16,7 +16,9 @@ from nocturne.gitwork import (
     branch_name,
     cleanup,
     commit_push,
+    commit_push_followup,
     make_worktree,
+    make_worktree_from_branch,
     open_pr,
     prune_worktrees,
     reap_stale_worktrees,
@@ -589,3 +591,87 @@ def test_prepush_hook_is_executable() -> None:
     mode = HOOK_PATH.stat().st_mode & 0o777
     assert mode & 0o100, f"hook owner exec bit not set: {oct(mode)}"
     assert mode >= 0o744, f"hook mode {oct(mode)} < 0o744"
+
+
+# -----------------------------
+# make_worktree_from_branch + commit_push_followup (post-PR feedback loop)
+# -----------------------------
+
+
+def _setup_origin_with_branch(repo: Path, tmp_path: Path, branch: str) -> Path:
+    """Give `repo` an `origin` bare remote carrying `main` and a feature branch."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(origin)], check=True)
+    subprocess.run(["git", "-C", str(repo), "push", "-q", "origin", "main"], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", branch], check=True)
+    (repo / "feature.txt").write_text("feature work\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "feature.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=T", "-c", "user.email=t@l",
+         "commit", "-q", "-m", "feat"], check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "push", "-q", "origin", branch], check=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+    return origin
+
+
+def test_make_worktree_from_branch_checks_out_existing_branch(tmp_worktree: Path, tmp_path: Path) -> None:
+    _setup_origin_with_branch(tmp_worktree, tmp_path, "nocturne/issue-1-1")
+    wt = tmp_path / "wt-fix"
+
+    make_worktree_from_branch(tmp_worktree, "nocturne/issue-1-1", wt)
+
+    assert (wt / "feature.txt").exists(), "must check out the existing branch content"
+    current = subprocess.run(
+        ["git", "-C", str(wt), "branch", "--show-current"], capture_output=True, text=True,
+    ).stdout.strip()
+    assert current == "nocturne/issue-1-1"
+
+
+def test_commit_push_followup_appends_commit_without_squash(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_origin_with_branch(tmp_worktree, tmp_path, "nocturne/issue-2-1")
+    wt = tmp_path / "wt-follow"
+    make_worktree_from_branch(tmp_worktree, "nocturne/issue-2-1", wt)
+    (wt / "fix.txt").write_text("the fix\n", encoding="utf-8")
+
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", MagicMock())
+    real_run = subprocess.run
+    pushed: dict[str, object] = {}
+
+    def fake_run(args, *a, **kw):
+        if isinstance(args, (list, tuple)) and "push" in list(args):
+            pushed["args"] = list(args)
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    commit_push_followup(wt, "Address ci feedback on #2")
+
+    # History preserved (init + feat + fix), NOT reset/squashed to base.
+    log = real_run(["git", "-C", str(wt), "log", "--oneline"], capture_output=True, text=True).stdout.strip().splitlines()
+    assert len(log) == 3
+    assert "push" in pushed["args"] and "--force" not in pushed["args"]
+    # Both the branch's prior work and the new fix are present.
+    assert (wt / "feature.txt").exists() and (wt / "fix.txt").exists()
+
+
+def test_commit_push_followup_blocks_sensitive_paths(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_origin_with_branch(tmp_worktree, tmp_path, "nocturne/issue-3-1")
+    wt = tmp_path / "wt-follow-bad"
+    make_worktree_from_branch(tmp_worktree, "nocturne/issue-3-1", wt)
+    workflows = wt / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "evil.yml").write_text("on: push\n", encoding="utf-8")
+
+    push_guard = MagicMock()
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", push_guard)
+
+    with pytest.raises(GuardrailViolation, match=r"\.github/workflows/evil\.yml"):
+        commit_push_followup(wt, "sneaky")
+    assert push_guard.call_count == 0

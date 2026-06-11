@@ -64,3 +64,19 @@ CREATE TABLE IF NOT EXISTS review_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_runs_pr_url ON review_runs(pr_url);
+
+CREATE TABLE IF NOT EXISTS pr_watches (
+    pr_url TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    repo_slug TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    base TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'watching',
+    fix_attempts INTEGER NOT NULL DEFAULT 0,
+    last_signature TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pr_watches_state ON pr_watches(state);

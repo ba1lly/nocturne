@@ -1212,3 +1212,111 @@ def test_run_batch_collects_aborted_into_report(
     assert report.done[0].id == t2.id
     assert len(report.aborted) == 1
     assert report.aborted[0].id == t1.id
+
+
+# --------------------------------------------------------------------------------------
+# Post-PR feedback loop: watch registration + re-dispatch
+# --------------------------------------------------------------------------------------
+
+
+def test_pr_watch_registered_when_reactions_enabled(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
+) -> None:
+    cfg.reactions.enabled = True
+    _patch_all(monkeypatch)
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    watch = inmem_store.get_pr_watch(result.pr_url)
+    assert watch is not None
+    assert watch.task_id == task.id
+    assert watch.pr_number == 9  # from the default mocked PR url .../pull/9
+    assert watch.state == "watching"
+
+
+def test_pr_watch_not_registered_when_reactions_disabled(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store
+) -> None:
+    assert cfg.reactions.enabled is False  # default
+    _patch_all(monkeypatch)
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert inmem_store.get_pr_watch(result.pr_url) is None
+
+
+def test_process_pr_reaction_pushes_fix_on_success(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    from nocturne.models import PRWatch
+
+    inmem_store.insert_task(task) if inmem_store.get_task(task.id) is None else None
+    now = datetime.now(UTC)
+    watch = PRWatch(
+        pr_url="https://github.com/owner/nocturne-playground/pull/9", task_id=task.id,
+        repo_slug=task.repo_slug, pr_number=9, branch="nocturne/issue-42-1", base="main",
+        created_at=now, updated_at=now,
+    )
+    inmem_store.add_pr_watch(watch)
+
+    made: dict[str, object] = {}
+
+    def fake_make_from_branch(repo_path, branch, wt_path):
+        made["branch"] = branch
+        Path(wt_path).mkdir(parents=True, exist_ok=True)
+        return Path(wt_path)
+
+    followup: list[tuple] = []
+
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.make_worktree_from_branch", fake_make_from_branch)
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.commit_push_followup",
+                        lambda wt, msg: followup.append((wt, msg)))
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.cleanup", lambda wt, repo: None)
+    monkeypatch.setattr("nocturne.orchestrator.opencode_driver.run",
+                        lambda *a, **k: FakeOpenCodeResult.success("fixed"))
+    monkeypatch.setattr("nocturne.orchestrator.verifier.verify",
+                        lambda task, wt, *, strip_env=(): VerifyResult(passed=True, exit_code=0, stdout="", stderr="", new_test_added=False))
+    monkeypatch.setattr("nocturne.guardrails.assert_not_main_branch", lambda wt, base: None)
+
+    pushed, _tokens = orchestrator.process_pr_reaction(watch, "ci", "tests failed", cfg, inmem_store)
+
+    assert pushed is True
+    assert made["branch"] == "nocturne/issue-42-1"  # re-materialised the PR branch, not base
+    assert len(followup) == 1  # fast-forward fix commit pushed, no new PR
+
+
+def test_process_pr_reaction_no_push_when_verify_fails(
+    monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime
+
+    from nocturne.models import PRWatch
+
+    if inmem_store.get_task(task.id) is None:
+        inmem_store.insert_task(task)
+    now = datetime.now(UTC)
+    watch = PRWatch(
+        pr_url="https://github.com/owner/nocturne-playground/pull/9", task_id=task.id,
+        repo_slug=task.repo_slug, pr_number=9, branch="nocturne/issue-42-1", base="main",
+        created_at=now, updated_at=now,
+    )
+    inmem_store.add_pr_watch(watch)
+
+    followup: list[tuple] = []
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.make_worktree_from_branch",
+                        lambda repo, branch, wt: (Path(wt).mkdir(parents=True, exist_ok=True), Path(wt))[1])
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.commit_push_followup",
+                        lambda wt, msg: followup.append((wt, msg)))
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.cleanup", lambda wt, repo: None)
+    monkeypatch.setattr("nocturne.orchestrator.opencode_driver.run",
+                        lambda *a, **k: FakeOpenCodeResult.success("attempted"))
+    monkeypatch.setattr("nocturne.orchestrator.verifier.verify",
+                        lambda task, wt, *, strip_env=(): VerifyResult(passed=False, exit_code=1, stdout="", stderr="", new_test_added=False, reason="still broken"))
+    monkeypatch.setattr("nocturne.guardrails.assert_not_main_branch", lambda wt, base: None)
+
+    pushed, _tokens = orchestrator.process_pr_reaction(watch, "ci", "tests failed", cfg, inmem_store)
+
+    assert pushed is False
+    assert followup == [], "must NOT push when the fix does not pass verify"

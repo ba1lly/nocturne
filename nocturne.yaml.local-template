@@ -68,3 +68,12 @@ healthcheck:
 persona:
   enabled: true
   soul_path: "~/.config/nocturne/soul.md"
+
+reactions:
+  # Post-PR feedback loop (fix CI, address review comments). Never merges.
+  enabled: false
+  fix_failing_ci: true
+  address_review_comments: true
+  notify_when_ready: true
+  max_fix_attempts: 3
+  watch_ttl_hours: 168

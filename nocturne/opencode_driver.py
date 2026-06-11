@@ -236,8 +236,9 @@ def run(
     cfg: Config,
     prior_failure: str | None = None,
     on_pid_started: Callable[[int], None] | None = None,
+    prompt_override: str | None = None,
 ) -> OpenCodeResult:
-    prompt_content = render_prompt(task, cfg, prior_failure)
+    prompt_content = prompt_override if prompt_override is not None else render_prompt(task, cfg, prior_failure)
     args = _build_opencode_args(task, cwd, prompt_content, cfg)
     enforce_no_dangerous_opencode_flags(args)
 
