@@ -8,10 +8,11 @@ Projects-classic GraphQL path that ``gh pr view`` walks, so we never touch it.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from nocturne._gh_retry import run_gh
+from nocturne._gh_retry import GhError, run_gh
 
 PRLifecycle = Literal["OPEN", "MERGED", "CLOSED"]
 CIState = Literal["PASSING", "FAILING", "PENDING", "NONE"]
@@ -49,6 +50,38 @@ def _lifecycle(pull: dict[str, Any]) -> PRLifecycle:
     return "OPEN"
 
 
+_RUN_ID_RE = re.compile(r"/runs/(\d+)")
+_LOG_TS_RE = re.compile(r"^\S+Z\s")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_MAX_LOG_LINES = 160
+
+
+def _actions_failure_log(repo_slug: str, run: dict[str, Any]) -> str:
+    """Best-effort fetch of the failing GitHub Actions job log.
+
+    Check-runs from Actions expose only a generic ``output.summary`` (the job
+    name), so the actionable error lives in the job log. We pull it via
+    ``gh run view --log-failed`` and return a cleaned tail. Returns "" on any
+    failure so the caller falls back to the summary.
+    """
+    match = _RUN_ID_RE.search(run.get("details_url") or run.get("html_url") or "")
+    if not match:
+        return ""
+    try:
+        raw = run_gh(["gh", "run", "view", match.group(1), "--repo", repo_slug, "--log-failed"])
+    except GhError:
+        return ""
+    cleaned: list[str] = []
+    for line in raw.splitlines():
+        # Format: "<job>\t<step>\t<timestamp> <content>"; keep the content.
+        content = line.split("\t")[-1]
+        content = _ANSI_RE.sub("", _LOG_TS_RE.sub("", content)).rstrip()
+        if content:
+            cleaned.append(content)
+    tail = cleaned[-_MAX_LOG_LINES:]
+    return "\n".join(tail)[:_MAX_FEEDBACK_CHARS]
+
+
 def _ci_state(repo_slug: str, sha: str) -> tuple[CIState, str]:
     """Combine check-runs and legacy commit statuses into one CI verdict."""
     failing: list[str] = []
@@ -66,7 +99,11 @@ def _ci_state(repo_slug: str, sha: str) -> tuple[CIState, str]:
             name = run.get("name", "check")
             output = run.get("output") or {}
             detail = output.get("summary") or output.get("title") or ""
-            failing.append(f"### CI check failed: {name}\n{detail}".rstrip())
+            # Actions check-runs carry only the job name in the summary; pull
+            # the real error from the job log so the agent knows what to fix.
+            log_tail = _actions_failure_log(repo_slug, run)
+            body = log_tail or detail
+            failing.append(f"### CI check failed: {name}\n{body}".rstrip())
         elif conclusion in ("success", "neutral", "skipped"):
             any_success = True
 

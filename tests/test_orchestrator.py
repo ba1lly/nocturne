@@ -1305,11 +1305,12 @@ def test_process_pr_reaction_no_push_when_verify_fails(
     inmem_store.add_pr_watch(watch)
 
     followup: list[tuple] = []
+    cleaned: list[tuple] = []
     monkeypatch.setattr("nocturne.orchestrator.gitwork.make_worktree_from_branch",
                         lambda repo, branch, wt: (Path(wt).mkdir(parents=True, exist_ok=True), Path(wt))[1])
     monkeypatch.setattr("nocturne.orchestrator.gitwork.commit_push_followup",
                         lambda wt, msg: followup.append((wt, msg)))
-    monkeypatch.setattr("nocturne.orchestrator.gitwork.cleanup", lambda wt, repo: None)
+    monkeypatch.setattr("nocturne.orchestrator.gitwork.cleanup", lambda wt, repo: cleaned.append((wt, repo)))
     monkeypatch.setattr("nocturne.orchestrator.opencode_driver.run",
                         lambda *a, **k: FakeOpenCodeResult.success("attempted"))
     monkeypatch.setattr("nocturne.orchestrator.verifier.verify",
@@ -1320,3 +1321,4 @@ def test_process_pr_reaction_no_push_when_verify_fails(
 
     assert pushed is False
     assert followup == [], "must NOT push when the fix does not pass verify"
+    assert len(cleaned) == 1, "the fix worktree must be torn down even on failure (no leak)"

@@ -120,6 +120,10 @@ def test_make_worktree_excludes_build_artifacts(tmp_worktree: Path, tmp_path: Pa
     (wt_path / ".pytest_cache").mkdir(exist_ok=True)
     (wt_path / ".pytest_cache" / "CACHEDIR.TAG").write_text("x", encoding="utf-8")
     (wt_path / ".coverage").write_text("x", encoding="utf-8")
+    # opencode's own session-state dir must never land in a PR (dogfood finding).
+    omo = wt_path / ".omo" / "run-continuation"
+    omo.mkdir(parents=True, exist_ok=True)
+    (omo / "ses_abc.json").write_text("{}", encoding="utf-8")
 
     status = subprocess.run(
         ["git", "-C", str(wt_path), "status", "--porcelain"],
@@ -129,6 +133,7 @@ def test_make_worktree_excludes_build_artifacts(tmp_worktree: Path, tmp_path: Pa
     assert ".pyc" not in status
     assert ".pytest_cache" not in status
     assert ".coverage" not in status
+    assert ".omo" not in status
 
 
 def test_local_exclude_upgrades_from_legacy_two_line_file(tmp_worktree: Path, tmp_path: Path) -> None:

@@ -82,6 +82,62 @@ def test_open_pr_passing_ci_and_approved(monkeypatch: pytest.MonkeyPatch) -> Non
     assert state.review == "APPROVED"
 
 
+def test_failing_check_run_pulls_actions_job_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Actions check-runs only carry the job name in output.summary, so the
+    real error must be pulled from the job log via gh run view --log-failed."""
+    log = (
+        "test\truff\t2026-06-11T16:14:32Z \x1b[36;1mruff check .\x1b[0m\n"
+        "test\truff\t2026-06-11T16:14:33Z F401 [*] `os` imported but unused\n"
+        "test\truff\t2026-06-11T16:14:33Z  --> src/playground/math.py:1:8\n"
+        "test\truff\t2026-06-11T16:14:33Z ##[error]Process completed with exit code 1.\n"
+    )
+
+    def fake_run_gh(args: list[str]) -> str:
+        path_or_cmd = args[-1]
+        if args[:3] == ["gh", "run", "view"]:
+            return log
+        if path_or_cmd.endswith("pulls/9"):
+            return json.dumps({"merged": False, "state": "open", "head": {"sha": "s"}})
+        if path_or_cmd.endswith("check-runs"):
+            return json.dumps({"check_runs": [{
+                "name": "test", "status": "completed", "conclusion": "failure",
+                "output": {"summary": "test"},  # generic Actions summary
+                "details_url": "https://github.com/o/r/actions/runs/12345/job/678",
+            }]})
+        return "{}" if path_or_cmd.endswith(("status",)) else "[]"
+
+    monkeypatch.setattr(github_pr, "run_gh", fake_run_gh)
+    state = get_pr_state("o/r", 9)
+
+    assert state.ci == "FAILING"
+    assert "F401" in state.failing_summary
+    assert "src/playground/math.py:1:8" in state.failing_summary
+    assert "\x1b[" not in state.failing_summary  # ANSI stripped
+
+
+def test_failing_check_run_falls_back_to_summary_without_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nocturne._gh_retry import GhError
+
+    def fake_run_gh(args: list[str]) -> str:
+        p = args[-1]
+        if args[:3] == ["gh", "run", "view"]:
+            raise GhError("no log")
+        if p.endswith("pulls/9"):
+            return json.dumps({"merged": False, "state": "open", "head": {"sha": "s"}})
+        if p.endswith("check-runs"):
+            return json.dumps({"check_runs": [{
+                "name": "build", "status": "completed", "conclusion": "failure",
+                "output": {"summary": "the build broke"},
+                # no details_url -> cannot fetch a log
+            }]})
+        return "{}" if p.endswith("status") else "[]"
+
+    monkeypatch.setattr(github_pr, "run_gh", fake_run_gh)
+    state = get_pr_state("o/r", 9)
+    assert state.ci == "FAILING"
+    assert "the build broke" in state.failing_summary
+
+
 def test_failing_commit_status_counts_as_failing(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_api(monkeypatch, {
         "pulls/9": {"merged": False, "state": "open", "head": {"sha": "s"}},
