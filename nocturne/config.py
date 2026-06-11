@@ -49,6 +49,11 @@ class OpenCodeConfig(StrictBaseModel):
     command: str = "opencode"
     timeout_min: int = 25
     worktree_root: str = "/tmp/nocturne"
+    # Failed/aborted worktrees are kept for post-mortem inspection, but reaped
+    # once older than this many hours so they cannot exhaust disk. Far longer
+    # than any single run (timeout_min), so an in-flight worktree is never hit.
+    # 0 disables reaping.
+    worktree_ttl_hours: int = 48
 
 
 class RepoConfig(StrictBaseModel):

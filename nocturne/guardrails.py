@@ -33,6 +33,72 @@ def enforce_no_dangerous_opencode_flags(args: list[str]) -> None:
         raise GuardrailViolation("dangerous opencode flag blocked")
 
 
+# Path prefixes a generated PR must never touch. opencode acts on
+# attacker-influenceable issue text, so a prompt injection could try to plant a
+# malicious CI workflow (which runs with repo secrets on the next push) or drop
+# a credential file. These paths are rarely legitimate for an autonomous bot to
+# author, so we block the whole commit rather than ship them unreviewed.
+_SENSITIVE_PATH_PREFIXES: tuple[str, ...] = (
+    ".github/workflows/",
+    ".github/actions/",
+    ".ssh/",
+    ".aws/",
+)
+
+# Exact basenames (anywhere in the tree) that indicate a secret/credential file.
+_SENSITIVE_BASENAMES: frozenset[str] = frozenset({
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".pgpass",
+    ".dockercfg",
+    "credentials",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+})
+
+# Suffixes that indicate private-key material regardless of basename.
+_SENSITIVE_SUFFIXES: tuple[str, ...] = (".pem", ".key", ".p12", ".pfx")
+
+
+def _is_sensitive_path(path: str) -> bool:
+    norm = path.replace("\\", "/")
+    if norm.startswith("./"):
+        norm = norm[2:]
+    parts = norm.split("/")
+    basename = parts[-1] if parts else norm
+    if any(norm.startswith(prefix) for prefix in _SENSITIVE_PATH_PREFIXES):
+        return True
+    # A sensitive dir component anywhere in the path (e.g. config/.ssh/key).
+    if ".ssh" in parts or ".aws" in parts:
+        return True
+    if basename in _SENSITIVE_BASENAMES:
+        return True
+    if basename == ".env" or basename.startswith(".env."):
+        return True
+    if any(basename.endswith(suffix) for suffix in _SENSITIVE_SUFFIXES):
+        return True
+    return False
+
+
+def find_sensitive_paths(paths: list[str]) -> list[str]:
+    """Return the subset of ``paths`` that match a sensitive/credential pattern."""
+    return [p for p in paths if _is_sensitive_path(p)]
+
+
+def assert_no_sensitive_paths(paths: list[str]) -> None:
+    """Raise GuardrailViolation if any staged path is sensitive (CI workflow,
+    private key, credential file, ...). See ``_SENSITIVE_PATH_PREFIXES``.
+    """
+    offenders = find_sensitive_paths(paths)
+    if offenders:
+        raise GuardrailViolation(
+            "sensitive paths blocked from PR: " + ", ".join(sorted(offenders))
+        )
+
+
 def assert_not_main_branch(worktree_path: Path, expected_base: str) -> None:
     result = subprocess.run(
         ["git", "-C", str(worktree_path), "branch", "--show-current"],

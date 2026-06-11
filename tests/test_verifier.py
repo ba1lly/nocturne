@@ -156,6 +156,33 @@ def test_verify_runs_in_correct_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert kwargs.get("shell") is True
 
 
+def test_verify_scrubs_credentials_from_subprocess_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """verify runs agent-authored test code: it must not inherit the operator's
+    git remote credentials or the model provider key it has no need for."""
+    monkeypatch.setenv("GH_TOKEN", "ghp_secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh_secret")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/agent.sock")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "model_secret")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    recorder = RecordingSubprocess()
+    recorder.queue_result(make_subprocess_result(exit_code=0, stdout="ok", stderr=""))
+    monkeypatch.setattr(subprocess, "run", recorder)
+    task = make_task(verify_cmd="pytest -q", require_new_test=False, checkout_path=str(worktree))
+
+    verify(task, worktree, strip_env={"DASHSCOPE_API_KEY"})
+
+    env = recorder.calls[0][1]["env"]
+    assert "GH_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "SSH_AUTH_SOCK" not in env
+    assert "DASHSCOPE_API_KEY" not in env  # provider key stripped via strip_env
+    assert "IdentityAgent=none" in env["GIT_SSH_COMMAND"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
 def test_diff_includes_test_detects_feature_branch(tmp_worktree: Path) -> None:
     subprocess.run(["git", "-C", str(tmp_worktree), "checkout", "-b", "feat-test-diff"], check=True)
     commit_file(tmp_worktree, "tests/test_a.py", "def test_a():\n    assert True\n", "add test a")

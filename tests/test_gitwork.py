@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import MagicMock
@@ -18,6 +19,7 @@ from nocturne.gitwork import (
     make_worktree,
     open_pr,
     prune_worktrees,
+    reap_stale_worktrees,
 )
 from nocturne.guardrails import GuardrailViolation
 from tests.fakes import FakeGhResult, RecordingSubprocess, make_subprocess_result
@@ -321,6 +323,53 @@ def test_commit_push_raises_when_no_changes_after_reset(
         commit_push(wt_path, "closes #6: nothing", "main")
 
 
+def test_commit_push_blocks_sensitive_path_and_never_pushes(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A diff that plants a CI workflow (a secret-exfil vector an injected
+    agent could try) is rejected before commit, and push is never reached."""
+    _seed_origin_ref(tmp_worktree, "main")
+    wt_path = tmp_path / "wt-sensitive"
+    make_worktree(tmp_worktree, "nocturne/issue-13-1", "main", wt_path)
+
+    (wt_path / "legit.py").write_text("print('ok')\n", encoding="utf-8")
+    workflows = wt_path / ".github" / "workflows"
+    workflows.mkdir(parents=True, exist_ok=True)
+    (workflows / "exfil.yml").write_text("on: push\n", encoding="utf-8")
+
+    push_guard = MagicMock()
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", push_guard)
+
+    with pytest.raises(GuardrailViolation, match=r"\.github/workflows/exfil\.yml"):
+        commit_push(wt_path, "closes #13: sneaky", "main")
+
+    # The force-push guard sits just before push; never reaching it proves we
+    # bailed before any push could happen.
+    assert push_guard.call_count == 0
+
+
+def test_commit_push_allows_clean_diff(
+    tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A diff touching only ordinary source files passes the scope guard."""
+    _seed_origin_ref(tmp_worktree, "main")
+    wt_path = tmp_path / "wt-clean"
+    make_worktree(tmp_worktree, "nocturne/issue-14-1", "main", wt_path)
+    (wt_path / "src.py").write_text("x = 1\n", encoding="utf-8")
+
+    monkeypatch.setattr("nocturne.gitwork.enforce_no_force_push", MagicMock())
+    real_run = subprocess.run
+
+    def fake_run(args, *a, **kw):
+        if isinstance(args, (list, tuple)) and "push" in list(args):
+            return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    commit_push(wt_path, "closes #14: clean change", "main")  # must not raise
+
+
 def test_commit_push_guardrail_blocks_force(
     tmp_worktree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -407,6 +456,72 @@ def test_open_pr_non_retryable_failure_does_not_retry(monkeypatch: pytest.Monkey
     with pytest.raises(GitworkError):
         open_pr("octo/repo", "nocturne/issue-7-1", "main", "t", "b")
     assert len(recorder.calls) == 1
+
+
+def test_open_pr_passes_network_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = RecordingSubprocess()
+    recorder.queue_result(FakeGhResult.success(stdout="https://github.com/octo/repo/pull/1\n"))
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    open_pr("octo/repo", "nocturne/issue-9-1", "main", "t", "b")
+
+    assert recorder.calls[0][1].get("timeout"), "gh pr create must run with a network timeout"
+
+
+def test_open_pr_timeout_is_retried_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unresponsive GitHub must not hang the daemon: timeouts retry, then fail."""
+    calls = {"n": 0}
+
+    def boom(*_a, **_kw):
+        calls["n"] += 1
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=120)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr("nocturne.gitwork.time.sleep", lambda *_: None)
+
+    with pytest.raises(GitworkError) as exc:
+        open_pr("octo/repo", "nocturne/issue-10-1", "main", "t", "b")
+    assert "timed out" in str(exc.value)
+    assert calls["n"] == 3  # three attempts before giving up
+
+
+# -----------------------------
+# reap_stale_worktrees
+# -----------------------------
+
+
+def test_reap_removes_old_dirs_keeps_recent(tmp_path: Path) -> None:
+    root = tmp_path / "wt-root"
+    root.mkdir()
+    old = root / "owner__repo-issue-1-1"
+    fresh = root / "owner__repo-issue-2-1"
+    old.mkdir()
+    fresh.mkdir()
+    # Age the old worktree past the TTL.
+    old_time = time.time() - 72 * 3600
+    os.utime(old, (old_time, old_time))
+
+    removed = reap_stale_worktrees(root, ttl_hours=48)
+
+    assert removed == 1
+    assert not old.exists()
+    assert fresh.exists()
+
+
+def test_reap_disabled_when_ttl_zero(tmp_path: Path) -> None:
+    root = tmp_path / "wt-root"
+    root.mkdir()
+    old = root / "stale"
+    old.mkdir()
+    old_time = time.time() - 1000 * 3600
+    os.utime(old, (old_time, old_time))
+
+    assert reap_stale_worktrees(root, ttl_hours=0) == 0
+    assert old.exists()
+
+
+def test_reap_missing_root_is_noop(tmp_path: Path) -> None:
+    assert reap_stale_worktrees(tmp_path / "does-not-exist", ttl_hours=48) == 0
 
 
 # -----------------------------

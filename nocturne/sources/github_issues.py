@@ -7,6 +7,8 @@ and error classification are uniform across the codebase.
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,9 +30,12 @@ __all__ = [
     "GhRateLimited",
     "GhSubprocessError",
     "IssueNotFound",
+    "IssueSnapshot",
     "comment",
     "fetch_eligible",
     "fetch_one",
+    "find_blocking_open_pr",
+    "get_issue_snapshot",
     "get_issue_state",
     "run_gh",
 ]
@@ -123,3 +128,59 @@ def get_issue_state(repo_slug: str, issue_number: int) -> str:
         "--jq", ".state",
     ])
     return output.strip()
+
+
+@dataclass(frozen=True)
+class IssueSnapshot:
+    """Live drift-relevant facts about an issue at PR-creation time."""
+
+    state: str  # "OPEN" or "CLOSED"
+    labels: tuple[str, ...]  # label names currently on the issue
+
+
+def get_issue_snapshot(repo_slug: str, issue_number: int) -> IssueSnapshot:
+    """Fetch live state + label names for the pre-PR drift guard."""
+    output = run_gh([
+        "gh", "issue", "view", str(issue_number),
+        "--repo", repo_slug,
+        "--json", "state,labels",
+    ])
+    data = json.loads(output)
+    state = data.get("state") or "OPEN"
+    labels = tuple(
+        str(label.get("name", ""))
+        for label in data.get("labels", [])
+        if isinstance(label, dict) and label.get("name")
+    )
+    return IssueSnapshot(state=state, labels=labels)
+
+
+def find_blocking_open_pr(repo_slug: str, issue_number: int) -> int | None:
+    """Return the number of an OPEN PR that already closes this issue, else None.
+
+    Scans open PR bodies for GitHub closing keywords (``closes #N`` etc.) via
+    ``gh pr list``. Deliberately avoids the GraphQL ``closingIssuesReferences``
+    field because this repo's GitHub instance rejects the Projects-classic
+    GraphQL path that ``gh pr`` walks.
+    """
+    output = run_gh([
+        "gh", "pr", "list",
+        "--repo", repo_slug,
+        "--state", "open",
+        "--json", "number,body",
+        "--limit", "100",
+    ])
+    items = json.loads(output) if output.strip() else []
+    pattern = re.compile(
+        rf"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#{issue_number}(?!\d)",
+        re.IGNORECASE,
+    )
+    for pr in items:
+        if not isinstance(pr, dict):
+            continue
+        body = pr.get("body") or ""
+        if pattern.search(body):
+            number = pr.get("number")
+            if isinstance(number, int):
+                return number
+    return None

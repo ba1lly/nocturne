@@ -25,6 +25,7 @@ from nocturne.config import (
 )
 from nocturne.guardrails import GuardrailViolation
 from nocturne.models import OpenCodeResult, Task, VerifyResult
+from nocturne.sources.github_issues import IssueSnapshot
 from nocturne.store import Store
 from tests.fakes import FakeOpenCodeResult
 
@@ -113,7 +114,7 @@ def _patch_all(
             on_pid_started(pid_emit)
         return next(oc_iter)
 
-    def fake_verify(task: Task, wt: Path) -> VerifyResult:
+    def fake_verify(task: Task, wt: Path, *, strip_env: Any = ()) -> VerifyResult:
         calls.verify.append((task.id, wt))
         return next(v_iter)
 
@@ -131,8 +132,12 @@ def _patch_all(
         if raise_in_assert:
             raise GuardrailViolation("worktree on protected base branch")
 
-    def fake_get_issue_state(repo: str, issue: int) -> str:
-        return "OPEN"
+    def fake_get_issue_snapshot(repo: str, issue: int) -> IssueSnapshot:
+        # OPEN and still carrying the trigger label -> no drift, proceed to PR.
+        return IssueSnapshot(state="OPEN", labels=("agent",))
+
+    def fake_find_blocking_open_pr(repo: str, issue: int) -> int | None:
+        return None
 
     monkeypatch.setattr("nocturne.orchestrator.make_worktree", fake_make_worktree)
     monkeypatch.setattr("nocturne.orchestrator.commit_push", fake_commit_push)
@@ -141,7 +146,8 @@ def _patch_all(
     monkeypatch.setattr("nocturne.orchestrator.opencode_driver.run", fake_run)
     monkeypatch.setattr("nocturne.orchestrator.verifier.verify", fake_verify)
     monkeypatch.setattr("nocturne.guardrails.assert_not_main_branch", fake_assert_not_main)
-    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_issue_state)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_snapshot", fake_get_issue_snapshot)
+    monkeypatch.setattr("nocturne.orchestrator.find_blocking_open_pr", fake_find_blocking_open_pr)
     return calls
 
 
@@ -1033,14 +1039,17 @@ def test_run_batch_dry_run_forwards_flag(
 
 
 # --------------------------------------------------------------------------------------
-# Task 28: Issue-state abort tests
+# Pre-PR drift guard: closed / label-removed / superseded-by-PR abort tests
 # --------------------------------------------------------------------------------------
 
 
 def test_aborts_on_closed_issue(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
     """When issue is CLOSED at check time, abort without PR."""
     calls = _patch_all(monkeypatch)
-    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", lambda repo, issue: "CLOSED")
+    monkeypatch.setattr(
+        "nocturne.orchestrator.get_issue_snapshot",
+        lambda repo, issue: IssueSnapshot(state="CLOSED", labels=("agent",)),
+    )
 
     result = orchestrator.process_task(task, cfg, inmem_store)
 
@@ -1060,10 +1069,10 @@ def test_404_treated_as_aborted(monkeypatch: pytest.MonkeyPatch, task: Task, cfg
 
     calls = _patch_all(monkeypatch)
 
-    def fake_get_state(repo: str, issue: int) -> str:
+    def fake_snapshot(repo: str, issue: int) -> IssueSnapshot:
         raise IssueNotFound("not found")
 
-    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_state)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_snapshot", fake_snapshot)
 
     result = orchestrator.process_task(task, cfg, inmem_store)
 
@@ -1077,10 +1086,41 @@ def test_404_treated_as_aborted(monkeypatch: pytest.MonkeyPatch, task: Task, cfg
     assert persisted.status == "aborted"
 
 
-def test_open_proceeds_to_pr(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
-    """When issue is OPEN, proceed with commit and PR."""
+def test_aborts_when_trigger_label_removed(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """A maintainer pulling the trigger label mid-run aborts without a PR."""
     calls = _patch_all(monkeypatch)
-    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", lambda repo, issue: "OPEN")
+    monkeypatch.setattr(
+        "nocturne.orchestrator.get_issue_snapshot",
+        lambda repo, issue: IssueSnapshot(state="OPEN", labels=("bug", "wontfix")),
+    )
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "aborted"
+    assert len(calls.commit_push) == 0
+    assert len(calls.open_pr) == 0
+    assert len(calls.cleanup) == 1
+
+
+def test_aborts_when_open_pr_already_addresses_issue(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """If a human already opened a PR that closes the issue, do not open a dup."""
+    calls = _patch_all(monkeypatch)
+    monkeypatch.setattr(
+        "nocturne.orchestrator.find_blocking_open_pr",
+        lambda repo, issue: 123,
+    )
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "aborted"
+    assert len(calls.commit_push) == 0
+    assert len(calls.open_pr) == 0
+    assert len(calls.cleanup) == 1
+
+
+def test_open_proceeds_to_pr(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """When issue is OPEN, labelled, and unsuperseded, proceed with commit and PR."""
+    calls = _patch_all(monkeypatch)
 
     result = orchestrator.process_task(task, cfg, inmem_store)
 
@@ -1094,16 +1134,39 @@ def test_open_proceeds_to_pr(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: C
     assert persisted.status == "done"
 
 
+def test_token_budget_exhausted_stops_retrying(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
+    """A single task whose cumulative tokens reach the global budget must stop
+    after the current attempt instead of retrying and blowing past it."""
+    cfg.guardrails.token_budget = 10_000
+    heavy = OpenCodeResult(
+        exit_code=0,
+        events=[{"type": "text", "text": "ok"}],
+        sentinel_seen=False,
+        need_input_question=None,
+        pid=1,
+        error_events=[],
+        token_usage=12_000,  # one attempt already exceeds budget
+    )
+    calls = _patch_all(monkeypatch, opencode_results=[heavy, heavy, heavy])
+
+    result = orchestrator.process_task(task, cfg, inmem_store)
+
+    assert result.status == "failed"
+    assert len(calls.opencode_run) == 1, "must not retry once budget is exhausted"
+    assert len(calls.commit_push) == 0
+    assert len(calls.open_pr) == 0
+
+
 def test_gh_failure_defaults_to_open(monkeypatch: pytest.MonkeyPatch, task: Task, cfg: Config, inmem_store: Store) -> None:
-    """When get_issue_state raises GhError (transient), default to OPEN and proceed."""
+    """When the snapshot recheck raises a transient GhError, proceed (open_pr is the backstop)."""
     from nocturne._gh_retry import GhRateLimited
 
     calls = _patch_all(monkeypatch)
 
-    def fake_get_state(repo: str, issue: int) -> str:
+    def fake_snapshot(repo: str, issue: int) -> IssueSnapshot:
         raise GhRateLimited("rate limited")
 
-    monkeypatch.setattr("nocturne.orchestrator.get_issue_state", fake_get_state)
+    monkeypatch.setattr("nocturne.orchestrator.get_issue_snapshot", fake_snapshot)
 
     result = orchestrator.process_task(task, cfg, inmem_store)
 

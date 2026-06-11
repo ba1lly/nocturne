@@ -32,6 +32,9 @@ opencode:
   command: "opencode"
   timeout_min: 25
   worktree_root: "/tmp/nocturne"
+  # Reap failed/aborted worktrees older than this (hours) so they can't fill the
+  # disk. Kept long enough for post-mortem inspection; 0 disables reaping.
+  worktree_ttl_hours: 48
 
 repos:
   - slug: "ba1lly/nocturne-playground" # GitHub owner/repo for gh + PR URLs

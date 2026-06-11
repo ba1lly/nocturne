@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
+import threading
 from pathlib import Path
-from typing import Callable, cast
+from typing import IO, Callable, cast
 
+from nocturne._sandbox import scrubbed_env
 from nocturne.config import Config, provider_of
 from nocturne.guardrails import enforce_no_dangerous_opencode_flags
 from nocturne.models import OpenCodeResult, Task
@@ -174,6 +178,58 @@ def _build_opencode_args(task: Task, cwd: Path, prompt_content: str, cfg: Config
     return args
 
 
+def _build_child_env(task: Task, cfg: Config, gh_config_dir: str) -> dict[str, str]:
+    """Environment for the opencode subprocess: parent env minus git remote
+    credentials, with gh redirected at a throwaway empty config dir and SSH
+    auth disabled.
+
+    opencode runs over attacker-influenceable issue text inside the worktree;
+    every git push / PR creation is performed by the PARENT process AFTER
+    opencode exits, so the agent never needs git remote write access. Only the
+    coding provider's API key is added back so opencode can reach its model.
+    """
+    extra: dict[str, str] = {}
+    model_string = task.coding_model if task.coding_model else cfg.models.coding
+    if model_string:
+        provider_name = provider_of(model_string)
+        provider_cfg = cfg.providers.get(provider_name)
+        if provider_cfg is not None:
+            api_key = os.environ.get(provider_cfg.api_key_env, "")
+            if api_key:
+                extra["OPENCODE_PROVIDER_API_KEY"] = api_key
+    return scrubbed_env(gh_config_dir=gh_config_dir, extra=extra)
+
+
+# Per-stream cap on opencode output held in memory. A real run emits kilobytes
+# of NDJSON; this bounds a runaway/malicious agent that loops emitting output so
+# it can never OOM the daemon. Output beyond the cap is drained but discarded,
+# and the run is failed (truncated NDJSON must not be acted on as success).
+_MAX_OUTPUT_CHARS = 64 * 1024 * 1024  # 64 MiB
+
+
+def _drain_capped(stream: IO[str], cap: int, sink: dict[str, object]) -> None:
+    """Read a text stream to EOF, retaining at most ``cap`` chars in
+    ``sink['parts']`` and setting ``sink['truncated']`` if it overflowed.
+
+    Keeps reading past the cap (discarding) so the child never blocks on a full
+    pipe; only the retained bytes consume memory.
+    """
+    parts = cast(list[str], sink["parts"])
+    total = 0
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            if total < cap:
+                parts.append(chunk[: cap - total])
+            if total + len(chunk) > cap:
+                sink["truncated"] = True
+            total += len(chunk)
+    except (OSError, ValueError):
+        pass
+
+
 def run(
     task: Task,
     cwd: Path,
@@ -185,51 +241,67 @@ def run(
     args = _build_opencode_args(task, cwd, prompt_content, cfg)
     enforce_no_dangerous_opencode_flags(args)
 
-    env = {**os.environ}
-    model_string = task.coding_model if task.coding_model else cfg.models.coding
-    if model_string:
-        provider_name = provider_of(model_string)
-        provider_cfg = cfg.providers.get(provider_name)
-        if provider_cfg is not None:
-            api_key = os.environ.get(provider_cfg.api_key_env, "")
-            if api_key:
-                env["OPENCODE_PROVIDER_API_KEY"] = api_key
-
-    proc = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-        cwd=str(cwd),
-    )
-    if on_pid_started is not None:
-        on_pid_started(proc.pid)
-
+    # Isolated, empty gh config dir for the child so opencode cannot reach the
+    # operator's stored GitHub auth. Lives only for this run; cleaned up below.
+    gh_config_dir = tempfile.mkdtemp(prefix="nocturne-gh-isolated-")
     try:
-        stdout, _stderr = proc.communicate(timeout=cfg.opencode.timeout_min * 60)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        _ = proc.communicate()
-        return OpenCodeResult(
-            exit_code=-1,
-            events=[],
-            sentinel_seen=False,
-            need_input_question=None,
-            pid=proc.pid,
-            error_events=[{"type": "timeout"}],
-            token_usage=0,
-        )
+        env = _build_child_env(task, cfg, gh_config_dir)
 
-    events, _parse_errors = parse_ndjson_stream(stdout)
-    error_events = has_error_events(events)
-    question = detect_sentinel(events)
-    return OpenCodeResult(
-        exit_code=proc.returncode,
-        events=events,
-        sentinel_seen=question is not None,
-        need_input_question=question,
-        pid=proc.pid,
-        error_events=error_events,
-        token_usage=extract_token_usage(events),
-    )
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=str(cwd),
+        )
+        if on_pid_started is not None:
+            on_pid_started(proc.pid)
+
+        assert proc.stdout is not None and proc.stderr is not None  # PIPE set above
+        # Drain both streams in threads with a per-stream memory cap so a
+        # runaway agent cannot OOM the daemon by emitting unbounded output.
+        out_sink: dict[str, object] = {"parts": [], "truncated": False}
+        err_sink: dict[str, object] = {"parts": [], "truncated": False}
+        t_out = threading.Thread(target=_drain_capped, args=(proc.stdout, _MAX_OUTPUT_CHARS, out_sink), daemon=True)
+        t_err = threading.Thread(target=_drain_capped, args=(proc.stderr, _MAX_OUTPUT_CHARS, err_sink), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        try:
+            proc.wait(timeout=cfg.opencode.timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return OpenCodeResult(
+                exit_code=-1,
+                events=[],
+                sentinel_seen=False,
+                need_input_question=None,
+                pid=proc.pid,
+                error_events=[{"type": "timeout"}],
+                token_usage=0,
+            )
+
+        t_out.join(timeout=10)
+        t_err.join(timeout=10)
+        stdout = "".join(cast(list[str], out_sink["parts"]))
+
+        events, _parse_errors = parse_ndjson_stream(stdout)
+        error_events = has_error_events(events)
+        # Output overflow means the NDJSON is truncated: fail the attempt rather
+        # than act on a partial stream as if it succeeded.
+        if out_sink["truncated"]:
+            error_events = [*error_events, {"type": "output_truncated"}]
+        question = detect_sentinel(events)
+        return OpenCodeResult(
+            exit_code=proc.returncode,
+            events=events,
+            sentinel_seen=question is not None,
+            need_input_question=question,
+            pid=proc.pid,
+            error_events=error_events,
+            token_usage=extract_token_usage(events),
+        )
+    finally:
+        shutil.rmtree(gh_config_dir, ignore_errors=True)

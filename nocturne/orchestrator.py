@@ -15,7 +15,11 @@ from nocturne.guardrails import (
     check_wallclock,
 )
 from nocturne.models import OpenCodeResult, ParkedTask, RunReport, Task, TriageResult
-from nocturne.sources.github_issues import fetch_eligible, get_issue_state
+from nocturne.sources.github_issues import (
+    fetch_eligible,
+    find_blocking_open_pr,
+    get_issue_snapshot,
+)
 from nocturne.store import Store
 from nocturne.triage import triage_batch
 
@@ -90,6 +94,41 @@ def _read_pr_body(worktree: Path, task: Task) -> tuple[str, str]:
     return title, body
 
 
+def _check_issue_drift(task: Task, repo_cfg: RepoConfig) -> str | None:
+    """Re-fetch live issue state immediately before PR creation and return a
+    human-readable reason to abort, or None to proceed.
+
+    Catches the three things a maintainer can do to an issue while opencode is
+    running for many minutes: close it, pull the trigger label (signalling "I'm
+    handling this"), or open a PR that already resolves it. On a transient gh
+    failure we return None (proceed) - open_pr is the final backstop, and a
+    network blip must not strand otherwise-finished work.
+    """
+    log = get_logger("nocturne.orchestrator")
+    try:
+        snapshot = get_issue_snapshot(task.repo_slug, task.issue_number)
+    except IssueNotFound:
+        return "issue not found (deleted or transferred)"
+    except GhError as e:
+        log.warning("task=%s issue-state recheck failed (proceeding): %s", task.id, e)
+        return None
+
+    if snapshot.state == "CLOSED":
+        return "issue closed during execution"
+    if repo_cfg.label and repo_cfg.label not in snapshot.labels:
+        return f"trigger label {repo_cfg.label!r} removed during execution"
+
+    try:
+        blocking_pr = find_blocking_open_pr(task.repo_slug, task.issue_number)
+    except GhError as e:
+        log.warning("task=%s linked-PR recheck failed (proceeding): %s", task.id, e)
+        blocking_pr = None
+    if blocking_pr is not None:
+        return f"open PR #{blocking_pr} already addresses this issue"
+
+    return None
+
+
 def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Task:
     log = get_logger("nocturne.orchestrator")
 
@@ -105,12 +144,23 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
 
     task.branch = branch_name(task.issue_number, task.attempts)
     worktree_path = _worktree_path_for(task, cfg)
+    # Reap old failed/aborted worktrees so they cannot exhaust disk over time.
+    reaped = gitwork.reap_stale_worktrees(
+        worktree_path.parent, cfg.opencode.worktree_ttl_hours
+    )
+    if reaped:
+        log.info("reaped %s stale worktree(s) under %s", reaped, worktree_path.parent)
     wt = make_worktree(Path(task.checkout_path), task.branch, task.base, worktree_path)
 
     success = False
     pid_callback = lambda pid: store.update_pid(task.id, pid)  # noqa: E731
     last_fail: str | None = None
     result: OpenCodeResult | None = None
+
+    # Provider API keys to strip from the verify subprocess: it runs
+    # agent-authored test code and needs no model access.
+    verify_strip_env = {p.api_key_env for p in cfg.providers.values()}
+    verify_strip_env.add("OPENCODE_PROVIDER_API_KEY")
 
     try:
         with WorktreeContext(wt, expected_base=task.base):
@@ -133,6 +183,17 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     store.add_task_tokens(task.id, result.token_usage)
                     task.token_usage += result.token_usage
 
+                # Mid-run budget guard: stop retrying a single task once its
+                # cumulative token spend reaches the global budget, so one task
+                # cannot blow far past it across attempts.
+                if task.token_usage >= cfg.guardrails.token_budget:
+                    last_fail = (
+                        f"token budget exhausted "
+                        f"({task.token_usage} >= {cfg.guardrails.token_budget})"
+                    )
+                    log.warning("task=%s %s; stopping retries", task.id, last_fail)
+                    break
+
                 if result.sentinel_seen:
                     log.warning(
                         "sentinel detected on task=%s question=%r",
@@ -153,7 +214,7 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     )
                     continue
 
-                v = verifier.verify(task, wt)
+                v = verifier.verify(task, wt, strip_env=verify_strip_env)
                 if not v.passed:
                     parts: list[str] = [v.stdout or "", "---STDERR---", v.stderr or ""]
                     fail_text = "\n".join(parts)
@@ -168,28 +229,30 @@ def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Ta
                     )
                     continue
 
-                # Task 28: issue-state check between OpenCode exit and PR creation
-                # Metis directive: prevents creating PRs against issues closed mid-execution
-                try:
-                    issue_state = get_issue_state(task.repo_slug, task.issue_number)
-                except IssueNotFound:
-                    log.info("Issue #%s not found (404); treating as aborted", task.issue_number)
-                    issue_state = "CLOSED"
-                except GhError as e:
-                    log.warning("could not check issue state (defaulting to OPEN): %s", e)
-                    issue_state = "OPEN"  # on transient gh failure, proceed (idempotent open_pr handles dup)
-
-                if issue_state == "CLOSED":
+                # Pre-PR drift guard: re-fetch live issue state between opencode
+                # exit and PR creation so we never race a maintainer who closed
+                # the issue, pulled the trigger label, or already opened a PR for
+                # it while opencode was running (potentially many minutes).
+                drift_reason = _check_issue_drift(task, _repo_cfg)
+                if drift_reason is not None:
                     store.update_status(task.id, "aborted")
                     task.status = "aborted"
-                    log.info("Issue #%s closed during execution; aborting without PR", task.issue_number)
-                    success = True  # mark for cleanup branch; treat as graceful exit
-                    break  # exit the attempt loop; finally cleanup still runs
+                    log.info(
+                        "task=%s aborting without PR (issue #%s): %s",
+                        task.id, task.issue_number, drift_reason,
+                    )
+                    success = True  # graceful exit; finally cleanup still runs
+                    break
 
                 # Success path.
                 if not dry_run:
                     pr_title, pr_body = _read_pr_body(wt, task)
-                    commit_push(wt, pr_title, task.base)
+                    try:
+                        commit_push(wt, pr_title, task.base)
+                    except GuardrailViolation as e:
+                        last_fail = f"guardrail blocked commit: {e}"
+                        log.warning("task=%s commit blocked by guardrail: %s", task.id, e)
+                        continue  # retry with feedback; never push the blocked diff
                     pr_url = open_pr(
                         task.repo_slug,
                         task.branch,

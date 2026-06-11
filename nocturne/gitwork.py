@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from nocturne.guardrails import enforce_no_force_push
+from nocturne.guardrails import assert_no_sensitive_paths, enforce_no_force_push
 
 
 class GitworkError(Exception):
@@ -15,6 +15,10 @@ class GitworkError(Exception):
 
 
 _PR_URL_RE = re.compile(r"https?://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+
+# Hard ceiling on git/gh network calls so an unresponsive GitHub can never hang
+# the daemon's task processing indefinitely.
+_GIT_NETWORK_TIMEOUT_S = 120
 
 _NOCTURNE_ENV = {
     "GIT_AUTHOR_NAME": "Nocturne",
@@ -49,6 +53,36 @@ def prune_worktrees(repo_path: Path) -> None:
         ["git", "-C", str(repo_path), "worktree", "prune"],
         check=True,
     )
+
+
+def reap_stale_worktrees(worktree_root: Path, ttl_hours: int) -> int:
+    """Delete worktree directories under ``worktree_root`` older than ``ttl_hours``.
+
+    Failed/aborted runs intentionally leave their worktree for post-mortem
+    inspection; without a reaper those accumulate until the disk fills. The TTL
+    is far longer than any single run, so an in-flight worktree (recent mtime)
+    is never removed. ``ttl_hours <= 0`` disables reaping. Returns the count
+    removed. Best-effort: never raises.
+    """
+    if ttl_hours <= 0 or not worktree_root.exists():
+        return 0
+    cutoff = time.time() - ttl_hours * 3600
+    removed = 0
+    try:
+        entries = list(worktree_root.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def branch_name(issue_id: int, attempt: int) -> str:
@@ -208,6 +242,17 @@ def commit_push(wt: Path, message: str, base: str) -> None:
     if diff_check.returncode == 0:
         raise GitworkError("commit_push: no changes to commit after reset to base")
 
+    # Scope guard: never ship CI workflows, private keys, or credential files an
+    # injected agent may have planted. Raises GuardrailViolation (caught upstream).
+    staged = subprocess.run(
+        ["git", "-C", str(wt), "diff", "--cached", "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    staged_paths = [line for line in staged.stdout.splitlines() if line.strip()]
+    assert_no_sensitive_paths(staged_paths)
+
     commit_args = [
         "git",
         "-C",
@@ -235,6 +280,7 @@ def commit_push(wt: Path, message: str, base: str) -> None:
         check=True,
         capture_output=True,
         text=True,
+        timeout=_GIT_NETWORK_TIMEOUT_S,
     )
 
 
@@ -256,7 +302,19 @@ def open_pr(repo: str, branch: str, base: str, title: str, body: str) -> str:
     ]
     last_stderr = ""
     for attempt in range(3):
-        result = subprocess.run(args, check=False, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                args, check=False, capture_output=True, text=True,
+                timeout=_GIT_NETWORK_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # GitHub unresponsive: treat like a transient error so the daemon
+            # never hangs indefinitely on one PR creation.
+            last_stderr = f"gh pr create timed out after {_GIT_NETWORK_TIMEOUT_S}s"
+            if attempt < 2:
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+            break
         last_stderr = result.stderr or ""
 
         if result.returncode == 0:
