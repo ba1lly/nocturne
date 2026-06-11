@@ -207,3 +207,23 @@ def test_load_test_config_patches_discord_ids(tmp_path: Path, monkeypatch: pytes
 
     assert cfg.discord.channel_id == 1
     assert cfg.discord.mention_user_id == 2
+
+
+def test_quiet_hours_tz_defaults_to_none() -> None:
+    from nocturne.config import DaemonConfig
+
+    assert DaemonConfig().quiet_hours_tz is None
+
+
+def test_quiet_hours_tz_accepts_valid_iana_name() -> None:
+    from nocturne.config import DaemonConfig
+
+    cfg = DaemonConfig(quiet_hours=[1, 2], quiet_hours_tz="America/New_York")
+    assert cfg.quiet_hours_tz == "America/New_York"
+
+
+def test_quiet_hours_tz_rejects_invalid_name() -> None:
+    from nocturne.config import ConfigError, DaemonConfig
+
+    with pytest.raises((ConfigError, ValidationError)):
+        DaemonConfig(quiet_hours_tz="Not/AZone")

@@ -17,6 +17,7 @@ from nocturne.store import Store
 
 if TYPE_CHECKING:
     from nocturne.discord_bot import NocturneBot
+    from nocturne.models import Task
 
 logger = get_logger("nocturne.daemon")
 
@@ -89,23 +90,79 @@ class Daemon:
         return is_paused
 
     def _is_quiet_hour(self) -> bool:
-        """Check whether the current UTC hour is in cfg.daemon.quiet_hours."""
+        """Check whether the current hour is in cfg.daemon.quiet_hours.
+
+        Hours are interpreted in ``cfg.daemon.quiet_hours_tz`` when set,
+        otherwise UTC. For a "night shift" tool, operators usually want their
+        local night, so the tz override avoids a surprising UTC-only footgun.
+        """
         quiet = list(self.cfg.daemon.quiet_hours or [])
         if not quiet:
             return False
-        now_hour = datetime.now(timezone.utc).hour
+        tz_name = self.cfg.daemon.quiet_hours_tz
+        if tz_name is None:
+            now_hour = datetime.now(timezone.utc).hour
+        else:
+            from zoneinfo import ZoneInfo
+            now_hour = datetime.now(ZoneInfo(tz_name)).hour
         return now_hour in quiet
 
     def _is_budget_exhausted(self) -> bool:
         """Check if tokens used exceeded the configured token budget."""
         return self._tokens_used > self.cfg.guardrails.token_budget
 
+    async def _process_and_report(
+        self,
+        task: "Task",
+        cycle_summary: dict[str, Any],
+        cycle_done: list,
+        cycle_failed: list,
+        *,
+        err_prefix: str,
+    ) -> bool:
+        """Run one task through process_task, report it, and account its tokens.
+
+        Shared by the resumed and DOABLE paths so they can never drift. Returns
+        True once the cumulative token budget is exhausted (caller stops
+        scheduling new work for the rest of the cycle).
+        """
+        from nocturne.orchestrator import process_task
+
+        cycle_summary["doable"] += 1
+        try:
+            result_task = await asyncio.to_thread(
+                process_task, task, self.cfg, self.store
+            )
+        except Exception as e:
+            logger.error("process_task raised for %s %s: %s", err_prefix, task.id, e)
+            cycle_summary["errors"].append(f"{err_prefix}:{task.id}:{e}")
+            return False
+
+        if result_task.status == "done":
+            cycle_summary["processed_done"] += 1
+            cycle_done.append(result_task)
+        else:
+            cycle_summary["processed_failed"] += 1
+            cycle_failed.append(result_task)
+
+        if self.bot is not None:
+            from nocturne.reporter import post_task_report
+            try:
+                await post_task_report(result_task, self.bot)
+            except Exception as e:
+                logger.warning("Discord task report failed (non-blocking): %s", e)
+
+        # Real measured usage from the opencode event stream (0 if unavailable),
+        # replacing the old flat per-task heuristic.
+        self._tokens_used += result_task.token_usage
+        return self._is_budget_exhausted()
+
     async def run_one_cycle(self) -> dict[str, Any]:
         """Execute ONE full poll cycle across all repos. Returns a summary dict.
 
         Used by ``nocturne daemon --once`` (CLI testing) and by the main poll loop.
         """
-        from nocturne.orchestrator import process_task
+        from nocturne.orchestrator import _dispatch_triaged, partition_eligible
         from nocturne.sources.github_issues import fetch_eligible
         from nocturne.triage import triage_batch
 
@@ -144,32 +201,12 @@ class Daemon:
                 continue
             cycle_summary["fetched"] += len(issues)
 
-            from nocturne.orchestrator import partition_eligible
             to_triage, resumed = partition_eligible(issues, self.store)
 
             for task in resumed:
-                cycle_summary["doable"] += 1
-                try:
-                    result_task = await asyncio.to_thread(
-                        process_task, task, self.cfg, self.store
-                    )
-                    if result_task.status == "done":
-                        cycle_summary["processed_done"] += 1
-                        cycle_done.append(result_task)
-                    else:
-                        cycle_summary["processed_failed"] += 1
-                        cycle_failed.append(result_task)
-                    if self.bot is not None:
-                        from nocturne.reporter import post_task_report
-                        try:
-                            await post_task_report(result_task, self.bot)
-                        except Exception as e:
-                            logger.warning("Discord task report failed (non-blocking): %s", e)
-                except Exception as e:
-                    logger.error("process_task raised for resumed %s: %s", task.id, e)
-                    cycle_summary["errors"].append(f"resumed:{task.id}:{e}")
-                self._tokens_used += 5000
-                if self._is_budget_exhausted():
+                if await self._process_and_report(
+                    task, cycle_summary, cycle_done, cycle_failed, err_prefix="resumed"
+                ):
                     cycle_summary["budget_exhausted"] = True
                     break
 
@@ -187,36 +224,30 @@ class Daemon:
 
             for task, tr in triaged:
                 if tr.outcome == "DOABLE":
-                    cycle_summary["doable"] += 1
-                    try:
-                        result_task = await asyncio.to_thread(
-                            process_task, task, self.cfg, self.store
-                        )
-                        if result_task.status == "done":
-                            cycle_summary["processed_done"] += 1
-                            cycle_done.append(result_task)
-                        else:
-                            cycle_summary["processed_failed"] += 1
-                            cycle_failed.append(result_task)
-                        if self.bot is not None:
-                            from nocturne.reporter import post_task_report
-                            try:
-                                await post_task_report(result_task, self.bot)
-                            except Exception as e:
-                                logger.warning("Discord task report failed (non-blocking): %s", e)
-                    except Exception as e:
-                        logger.error("process_task raised for %s: %s", task.id, e)
-                        cycle_summary["errors"].append(f"process:{task.id}:{e}")
-                    self._tokens_used += 5000
-                    if self._is_budget_exhausted():
+                    if await self._process_and_report(
+                        task, cycle_summary, cycle_done, cycle_failed, err_prefix="process"
+                    ):
                         logger.warning(
                             "token budget exhausted mid-cycle; halting new scheduling"
                         )
                         cycle_summary["budget_exhausted"] = True
                         break
                 elif tr.outcome == "NEED_INPUT":
+                    # Park the issue and post the clarifying question. triage_batch
+                    # does NOT do this, so without dispatch the daemon would
+                    # silently re-triage NEED_INPUT issues every cycle and never
+                    # ask the user. _dispatch_triaged parks + comments (it never
+                    # calls process_task for NEED_INPUT).
                     cycle_summary["need_input"] += 1
+                    try:
+                        await asyncio.to_thread(
+                            _dispatch_triaged, task, tr, self.cfg, self.store
+                        )
+                    except Exception as e:
+                        logger.warning("park (need_input) failed for %s: %s", task.id, e)
+                        cycle_summary["errors"].append(f"park:{task.id}:{e}")
                 elif tr.outcome == "SKIP":
+                    # triage_batch already posted the idempotent skip comment.
                     cycle_summary["skip"] += 1
 
             if cycle_summary.get("budget_exhausted"):

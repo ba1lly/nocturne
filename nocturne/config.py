@@ -104,6 +104,21 @@ class DiscordConfig(StrictBaseModel):
 class DaemonConfig(StrictBaseModel):
     poll_interval_sec: int = 300
     quiet_hours: list[int] = Field(default_factory=list)
+    # IANA timezone name (e.g. "America/New_York") that quiet_hours are
+    # interpreted in. None = UTC (backwards-compatible default).
+    quiet_hours_tz: str | None = None
+
+    @field_validator("quiet_hours_tz")
+    @classmethod
+    def _validate_tz(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ConfigError(f"invalid quiet_hours_tz: {value!r}") from exc
+        return value
 
 
 class ReviewConfig(StrictBaseModel):
