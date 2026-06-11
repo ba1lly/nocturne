@@ -223,6 +223,7 @@ Start from [`config.example.yaml`](config.example.yaml). The wizard (`nocturne s
 - `guardrails.global_wallclock_hours`, `guardrails.token_budget` - hard stops.
 - `daemon.quiet_hours` - list of hours to skip cycles (UTC unless `daemon.quiet_hours_tz` is set to an IANA timezone name).
 - `healthcheck.bind_port` - change from default 8765 if it collides.
+- `reactions.enabled` - opt into the post-PR feedback loop (default `false`). When on, the **daemon** (not `run-once`) watches PRs Nocturne opened and reacts: `reactions.fix_failing_ci` re-dispatches the agent to fix failing CI, `reactions.address_review_comments` handles a reviewer's "changes requested", and `reactions.notify_when_ready` pings you when a PR is approved and green. It never merges. `reactions.max_fix_attempts` (default `3`) caps autonomous fixes per PR before escalating; `reactions.watch_ttl_hours` (default `168`) stops watching after that long. To fix CI it reads the failing job's logs, so the target repo's CI must surface them (e.g. GitHub Actions).
 
 ## CLI surface
 
