@@ -177,7 +177,6 @@ def process_pr_reaction(
     wt = gitwork.make_worktree_from_branch(Path(task.checkout_path), watch.branch, wt_path)
 
     tokens = 0
-    pushed = False
     try:
         with WorktreeContext(wt, expected_base=task.base):
             prompt = render_pr_fix_prompt(
@@ -205,12 +204,14 @@ def process_pr_reaction(
             except (GuardrailViolation, gitwork.GitworkError) as e:
                 log.warning("pr-reaction: could not push fix for %s: %s", watch.pr_url, e)
                 return (False, tokens)
-            pushed = True
             log.info("pr-reaction: pushed %s fix for %s", kind, watch.pr_url)
             return (True, tokens)
     finally:
-        if pushed:
-            gitwork.cleanup(wt, Path(task.checkout_path))
+        # Always tear down the ephemeral fix worktree - even on failure. A
+        # leaked worktree keeps the PR branch checked out and blocks every
+        # subsequent fix attempt for that branch. The branch's state lives on
+        # the PR, so there is nothing to inspect locally.
+        gitwork.cleanup(wt, Path(task.checkout_path))
 
 
 def process_task(task: Task, cfg: Config, store, *, dry_run: bool = False) -> Task:

@@ -172,6 +172,7 @@ _NOCTURNE_EXCLUDE_PATTERNS: list[str] = [
     # nocturne-internal
     ".nocturne-pr-body.md",  # opencode writes the PR title+body here (task.md.jinja2)
     ".reviews/",             # /review-pr persists multi-agent review output here
+    ".omo/",                 # opencode's own session/continuation state dir
     # build / test / tooling caches (never legitimately committed)
     "__pycache__/",
     "*.py[cod]",
