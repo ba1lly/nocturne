@@ -88,10 +88,10 @@ repos:
 **One task at a time, ever.** Nocturne runs strictly serial - one opencode session per cycle, no parallel issue processing. This is intentional: it keeps git worktree state, token spend, and Discord HITL latency easy to reason about.
 
 **Quiet hours + budgets** (all in `daemon:` / `guardrails:`):
-- `quiet_hours: [0, 1, 2, 3, 4]` - daemon skips poll cycles when current UTC hour is in this list
+- `quiet_hours: [0, 1, 2, 3, 4]` - daemon skips poll cycles when the current hour is in this list (UTC by default; set `quiet_hours_tz` to an IANA name like `America/New_York` to use local hours)
 - `poll_interval_sec: 300` - wait between cycles
 - `global_wallclock_hours: 8` - daemon stops scheduling new work after this rolling window
-- `token_budget: 2_000_000` - hard stop when cumulative token usage exceeds this
+- `token_budget: 2_000_000` - hard stop when cumulative token usage exceeds this. Usage is measured from each opencode session's event stream (input + output + reasoning + cache tokens) and accumulated per task; sessions that report no usage count as 0
 - `max_attempts: 3` - per-issue retry budget before marking `failed`
 - `per_task_timeout_min: 25` - kill opencode subprocess after this
 
@@ -215,7 +215,7 @@ Start from [`config.example.yaml`](config.example.yaml). The wizard (`nocturne s
 - `review.budget_attempts` - how many review->fix rounds opencode does per task (default `2`).
 - `review.fallback_repos` - list of GitHub repo slugs to try as reviewer-skill sources (used by `nocturne skill install-reviewer`). Empty list = always fall back to opencode's `/review`.
 - `guardrails.global_wallclock_hours`, `guardrails.token_budget` - hard stops.
-- `daemon.quiet_hours` - list of UTC hours to skip cycles.
+- `daemon.quiet_hours` - list of hours to skip cycles (UTC unless `daemon.quiet_hours_tz` is set to an IANA timezone name).
 - `healthcheck.bind_port` - change from default 8765 if it collides.
 
 ## CLI surface

@@ -48,6 +48,7 @@ discord:
 daemon:
   poll_interval_sec: 300
   quiet_hours: []
+  quiet_hours_tz: null # IANA tz the hours are in (e.g. "America/New_York"); null = UTC
 
 review:
   enabled: true
